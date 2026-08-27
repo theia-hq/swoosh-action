@@ -1,0 +1,21 @@
+name: swoosh-ssh-demo
+# Manually-triggered demo: bring this runner up reachable by `swoosh ssh` over the theia overlay.
+#
+# Set on this repo first:
+#   secret THEIA_KEY      base64 of a tightbeam key file (the runner's pre-minted identity)
+#   variable ALLOW        your laptop's NodeId (only this key may open a stream)
+#   variable AUTHORIZED_KEY   your ssh public key (ssh does the real shell auth)
+# Then:  gh workflow run demo.yml   and on your laptop:  swoosh ssh <runner-NodeId>
+on:
+  workflow_dispatch: {}
+jobs:
+  debug-ssh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          key: ${{ secrets.THEIA_KEY }}
+          authorized-key: ${{ vars.AUTHORIZED_KEY }}
+          allow: ${{ vars.ALLOW }}
+          minutes: "10"
