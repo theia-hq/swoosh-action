@@ -1,0 +1,19 @@
+# Example caller workflow (put this at .github/workflows/debug-ssh.yml in your repo).
+# Trigger: `gh workflow run debug-ssh.yml`, then `swoosh ssh ci-runner` from your laptop.
+name: debug-ssh
+on:
+  workflow_dispatch: {}
+  # Or attach the step to a real job with `if: failure()` to shell into a FAILED runner and poke around.
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25 # hard cap; the Action itself holds for `minutes`.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: theia-hq/swoosh-action@v1
+        with:
+          key: ${{ secrets.THEIA_CI_KEY }}
+          authorized-key: ${{ vars.SSH_PUBKEY }}
+          allow: ${{ vars.LAPTOP_ID }}
+          minutes: 20

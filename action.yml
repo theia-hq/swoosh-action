@@ -1,0 +1,107 @@
+# The flagship Action: expose a GitHub runner's sshd over the theia overlay, reachable by public key.
+# `uses: theia-hq/swoosh-action@v1` in any workflow, then `swoosh ssh <your-contact>` into the runner.
+name: swoosh-ssh
+description: Expose this runner's sshd over the theia overlay, reachable by public key across GitHub's NAT.
+
+inputs:
+  key:
+    description: >
+      base64 of a PRE-MINTED key file (`swoosh identity --key k.key && base64 k.key`). The runner adopts
+      this identity; you saved its NodeId as a contact in advance. Pass a GitHub SECRET.
+    required: true
+  authorized-key:
+    description: your PUBLIC ssh key, appended to authorized_keys (ssh does the real auth). A GitHub variable is fine.
+    required: true
+  allow:
+    description: >
+      your laptop's NodeId (`swoosh identity`). REQUIRED unless `open: true` — only this key may open a
+      stream to the runner (a gate a layer below ssh's own auth).
+    required: false
+    default: ""
+  open:
+    description: set "true" to accept a stream from ANY peer (ssh keys still gate the shell). Off by default; prefer `allow`.
+    required: false
+    default: "false"
+  minutes:
+    description: max minutes to hold the runner open. `touch $RUNNER_TEMP/theia-release` (over ssh) to end early.
+    required: false
+    default: "10"
+
+runs:
+  using: composite
+  steps:
+    - name: install theia tools (checksum-verified)
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Release assets exist (v0.1.x); SIGNING them is still TODO. Always verify a checksum, never a
+        # bare `curl | sudo`. Picks the asset matching this runner's OS/arch (linux or macOS).
+        os=$(uname -s | tr '[:upper:]' '[:lower:]'); case "$os" in darwin) os=macos ;; esac
+        arch=$(uname -m); case "$arch" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; esac
+        base=https://github.com/theia-hq
+        for tool in swoosh tightbeam; do
+          asset="$tool-$arch-$os"
+          sudo curl -fsSL "$base/$tool/releases/latest/download/$asset" -o "/usr/local/bin/$tool"
+          curl -fsSL "$base/$tool/releases/latest/download/$asset.sha256" -o "/tmp/$tool.sha256"
+          echo "$(cat /tmp/$tool.sha256)  /usr/local/bin/$tool" | shasum -a 256 -c -
+          sudo chmod +x "/usr/local/bin/$tool"
+        done
+
+    - name: start sshd and authorize your key
+      shell: bash
+      env:
+        AUTHORIZED_KEY: ${{ inputs.authorized-key }}
+      run: |
+        set -euo pipefail
+        sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server
+        mkdir -p ~/.ssh && chmod 700 ~/.ssh
+        printf '%s\n' "$AUTHORIZED_KEY" >> ~/.ssh/authorized_keys
+        chmod 600 ~/.ssh/authorized_keys
+        sudo systemctl start ssh || sudo service ssh start
+
+    - name: adopt identity and expose ssh over the overlay
+      shell: bash
+      env:
+        THEIA_KEY: ${{ inputs.key }}
+        ALLOW: ${{ inputs.allow }}
+        OPEN: ${{ inputs.open }}
+      run: |
+        set -euo pipefail
+        printf '%s' "$THEIA_KEY" | base64 -d > "$RUNNER_TEMP/runner.key"
+        chmod 600 "$RUNNER_TEMP/runner.key"
+        # Strict by default (only your laptop key may open a stream); `open: true` is an explicit opt-in.
+        if [ "$OPEN" = "true" ]; then
+          gate=(--gate open)
+        elif [ -n "$ALLOW" ]; then
+          gate=(--gate strict --allow "$ALLOW")
+        else
+          echo "::error::set the 'allow' input to your laptop NodeId (swoosh identity), or 'open: true'." >&2
+          exit 1
+        fi
+        # --quiet: the NodeId is NEVER printed, so it cannot leak into the (public) log by design, not by
+        # a redirect. Exposes over iroh (default): it self-publishes to discovery, reachable by key.
+        TIGHTBEAM_KEY="$RUNNER_TEMP/runner.key" \
+          tightbeam expose ssh=127.0.0.1:22 --quiet "${gate[@]}" 2> "$RUNNER_TEMP/tightbeam.err" &
+        echo $! > "$RUNNER_TEMP/tightbeam.pid"
+
+    - name: hold open (liveness + early release)
+      shell: bash
+      env:
+        MINUTES: ${{ inputs.minutes }}
+      run: |
+        set -uo pipefail
+        pid=$(cat "$RUNNER_TEMP/tightbeam.pid")
+        deadline=$(( SECONDS + MINUTES * 60 ))
+        echo "reachable over the overlay. on your laptop: swoosh ssh <your-contact>"
+        echo "(early release: ssh in and 'touch $RUNNER_TEMP/theia-release')"
+        while [ "$SECONDS" -lt "$deadline" ]; do
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "::error::the overlay tunnel exited before the hold ended." >&2
+            # Surface the failure WITHOUT the key: redact anything that looks like a node id.
+            sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/tightbeam.err" >&2 || true
+            exit 1
+          fi
+          if [ -e "$RUNNER_TEMP/theia-release" ]; then echo "released early."; break; fi
+          sleep 5
+        done
+        kill "$pid" 2>/dev/null || true
