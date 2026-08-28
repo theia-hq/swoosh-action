@@ -24,22 +24,20 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: install theia tools (checksum-verified)
+    - name: install tightbeam (checksum-verified)
       shell: bash
       run: |
         set -euo pipefail
-        # Release assets exist (v0.1.x); SIGNING them is still TODO. Always verify a checksum, never a
-        # bare `curl | sudo`. Picks the asset matching this runner's OS/arch (linux or macOS).
+        # The runner only needs tightbeam (to expose the shell); swoosh is a laptop-side tool, so it is
+        # not installed here. SIGNING the asset is still TODO. Always verify a checksum, never `curl | sudo`.
         os=$(uname -s | tr '[:upper:]' '[:lower:]'); case "$os" in darwin) os=macos ;; esac
         arch=$(uname -m); case "$arch" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; esac
-        base=https://github.com/theia-hq
-        for tool in swoosh tightbeam; do
-          asset="$tool-$arch-$os"
-          sudo curl -fsSL "$base/$tool/releases/latest/download/$asset" -o "/usr/local/bin/$tool"
-          curl -fsSL "$base/$tool/releases/latest/download/$asset.sha256" -o "/tmp/$tool.sha256"
-          echo "$(cat /tmp/$tool.sha256)  /usr/local/bin/$tool" | shasum -a 256 -c -
-          sudo chmod +x "/usr/local/bin/$tool"
-        done
+        asset="tightbeam-$arch-$os"
+        base=https://github.com/theia-hq/tightbeam/releases/latest/download
+        sudo curl -fsSL "$base/$asset" -o /usr/local/bin/tightbeam
+        curl -fsSL "$base/$asset.sha256" -o /tmp/tightbeam.sha256
+        echo "$(cat /tmp/tightbeam.sha256)  /usr/local/bin/tightbeam" | shasum -a 256 -c -
+        sudo chmod +x /usr/local/bin/tightbeam
 
     - name: adopt identity and expose a keyless shell over the overlay
       shell: bash
