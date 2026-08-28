@@ -14,6 +14,5 @@ jobs:
       - uses: theia-hq/swoosh-action@v1
         with:
           key: ${{ secrets.THEIA_CI_KEY }}
-          authorized-key: ${{ vars.SSH_PUBKEY }}
           allow: ${{ vars.LAPTOP_ID }}
           minutes: 20

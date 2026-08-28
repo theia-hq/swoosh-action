@@ -1,7 +1,9 @@
-# The flagship Action: expose a GitHub runner's sshd over the theia overlay, reachable by public key.
+# The flagship Action: expose a GitHub runner's shell over the theia overlay — with no SSH keys to manage.
 # `uses: theia-hq/swoosh-action@v1` in any workflow, then `swoosh ssh <your-contact>` into the runner.
+# The shell is a keyless SSH server (the sshh crate): it has no ssh keys of its own. The only thing that
+# can open a session is the NodeId you name in `allow`, so that capability IS the authentication.
 name: swoosh-ssh
-description: Expose this runner's sshd over the theia overlay, reachable by public key across GitHub's NAT.
+description: Expose this runner's keyless shell over the theia overlay, reachable by public key across GitHub's NAT.
 
 inputs:
   key:
@@ -9,19 +11,11 @@ inputs:
       base64 of a PRE-MINTED key file (`swoosh identity --key k.key && base64 k.key`). The runner adopts
       this identity; you saved its NodeId as a contact in advance. Pass a GitHub SECRET.
     required: true
-  authorized-key:
-    description: your PUBLIC ssh key, appended to authorized_keys (ssh does the real auth). A GitHub variable is fine.
-    required: true
   allow:
     description: >
-      your laptop's NodeId (`swoosh identity`). REQUIRED unless `open: true` — only this key may open a
-      stream to the runner (a gate a layer below ssh's own auth).
-    required: false
-    default: ""
-  open:
-    description: set "true" to accept a stream from ANY peer (ssh keys still gate the shell). Off by default; prefer `allow`.
-    required: false
-    default: "false"
+      your laptop's NodeId (`swoosh identity`). REQUIRED — only this key may open a session to the runner,
+      and since the shell is keyless that capability is the authentication (there is no ssh key behind it).
+    required: true
   minutes:
     description: max minutes to hold the runner open. `touch $RUNNER_TEMP/theia-release` (over ssh) to end early.
     required: false
@@ -47,43 +41,25 @@ runs:
           sudo chmod +x "/usr/local/bin/$tool"
         done
 
-    - name: start sshd and authorize your key
-      shell: bash
-      env:
-        AUTHORIZED_KEY: ${{ inputs.authorized-key }}
-      run: |
-        set -euo pipefail
-        sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server
-        mkdir -p ~/.ssh && chmod 700 ~/.ssh
-        printf '%s\n' "$AUTHORIZED_KEY" >> ~/.ssh/authorized_keys
-        chmod 600 ~/.ssh/authorized_keys
-        sudo systemctl start ssh || sudo service ssh start
-
-    - name: adopt identity and expose ssh over the overlay
+    - name: adopt identity and expose a keyless shell over the overlay
       shell: bash
       env:
         THEIA_KEY: ${{ inputs.key }}
         ALLOW: ${{ inputs.allow }}
-        OPEN: ${{ inputs.open }}
       run: |
         set -euo pipefail
-        printf '%s' "$THEIA_KEY" | base64 -d > "$RUNNER_TEMP/runner.key"
-        chmod 600 "$RUNNER_TEMP/runner.key"
-        # Allowlist by default (only your laptop key may open a stream); `open: true` is an explicit opt-in.
-        # Post-reframe: the --gate menu is gone -- `--allow` names the raw allowlist, `--public` opts out to
-        # anyone (ssh keys still gate the shell, so a public TCP tunnel to :22 is safe here).
-        if [ "$OPEN" = "true" ]; then
-          gate=(--public)
-        elif [ -n "$ALLOW" ]; then
-          gate=(--allow "$ALLOW")
-        else
-          echo "::error::set the 'allow' input to your laptop NodeId (swoosh identity), or 'open: true'." >&2
+        if [ -z "$ALLOW" ]; then
+          echo "::error::the 'allow' input is required: your laptop NodeId (swoosh identity)." >&2
           exit 1
         fi
-        # --quiet: the NodeId is NEVER printed, so it cannot leak into the (public) log by design, not by
-        # a redirect. Exposes over iroh (default): it self-publishes to discovery, reachable by key.
+        printf '%s' "$THEIA_KEY" | base64 -d > "$RUNNER_TEMP/runner.key"
+        chmod 600 "$RUNNER_TEMP/runner.key"
+        # `sshd:` is a keyless shell with no auth of its own, so it MUST be gated: --allow names the one
+        # NodeId permitted to open a session. tightbeam refuses `sshd:` with --public for exactly this
+        # reason. --quiet: the NodeId is NEVER printed, so it cannot leak into the (public) log by design.
+        # Exposes over iroh (default): it self-publishes to discovery, reachable by key across the NAT.
         TIGHTBEAM_KEY="$RUNNER_TEMP/runner.key" \
-          tightbeam expose ssh=127.0.0.1:22 --quiet "${gate[@]}" 2> "$RUNNER_TEMP/tightbeam.err" &
+          tightbeam expose ssh=sshd: --allow "$ALLOW" --quiet 2> "$RUNNER_TEMP/tightbeam.err" &
         echo $! > "$RUNNER_TEMP/tightbeam.pid"
 
     - name: hold open (liveness + early release)
@@ -98,7 +74,7 @@ runs:
         echo "(early release: ssh in and 'touch $RUNNER_TEMP/theia-release')"
         while [ "$SECONDS" -lt "$deadline" ]; do
           if ! kill -0 "$pid" 2>/dev/null; then
-            echo "::error::the overlay tunnel exited before the hold ended." >&2
+            echo "::error::the overlay shell exited before the hold ended." >&2
             # Surface the failure WITHOUT the key: redact anything that looks like a node id.
             sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/tightbeam.err" >&2 || true
             exit 1
