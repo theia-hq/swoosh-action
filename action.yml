@@ -69,11 +69,13 @@ runs:
         set -euo pipefail
         printf '%s' "$THEIA_KEY" | base64 -d > "$RUNNER_TEMP/runner.key"
         chmod 600 "$RUNNER_TEMP/runner.key"
-        # Strict by default (only your laptop key may open a stream); `open: true` is an explicit opt-in.
+        # Allowlist by default (only your laptop key may open a stream); `open: true` is an explicit opt-in.
+        # Post-reframe: the --gate menu is gone -- `--allow` names the raw allowlist, `--public` opts out to
+        # anyone (ssh keys still gate the shell, so a public TCP tunnel to :22 is safe here).
         if [ "$OPEN" = "true" ]; then
-          gate=(--gate open)
+          gate=(--public)
         elif [ -n "$ALLOW" ]; then
-          gate=(--gate strict --allow "$ALLOW")
+          gate=(--allow "$ALLOW")
         else
           echo "::error::set the 'allow' input to your laptop NodeId (swoosh identity), or 'open: true'." >&2
           exit 1
