@@ -5,50 +5,49 @@ across GitHub's NAT, with no port-forward, no SSH keys to manage, and nothing se
 the logs.
 
 ## The idea
-You pre-mint the runner's identity on your laptop, so you know how to address it *before the runner
-exists*. The runner adopts that identity from a secret and exposes a **keyless shell** over the overlay —
-an SSH server with no keys of its own. You `swoosh ssh` into it.
+You `mint` the runner's identity on your laptop — one command that both derives the runner's identity
+*before the runner exists* and records the name you'll reach it by. The runner adopts that authkey from a
+secret: it becomes the derived device **and** trusts your signet. Then it exposes a **keyless shell** over
+the overlay — an SSH server with no keys of its own — behind the default family gate. You `swoosh ssh`
+into it by membership.
 
-There is no ssh password or authorized key behind the shell. Instead, the one thing that can *open a
-session* to it is the NodeId you name in `allow` — your laptop's key. That capability is the
-authentication. This is why the repo can stay public: the runner key is a secret, the NodeId was never a
-secret to you, gh redacts the rest, and no one but your key can reach the shell in the first place.
+There is no ssh password or authorized key behind the shell. What opens a session is **membership**: the
+runner trusts your signet, so its family gate admits your devices, and your key self-signs a short-lived
+badge when you dial. That capability is the authentication. This is why the repo can stay public: the
+authkey is a secret, gh redacts node ids, and only a member of your signet can reach the shell.
 (Unlike tmate / "print a URL", nothing is read back from a log.)
 
 ## One-time setup (on your laptop)
 ```sh
-swoosh identity --key ci-runner.key      # → bf01…  the runner's NodeId
-swoosh contact add ci-runner bf01…       # you now know how to reach it, in advance
-swoosh identity                          # → your laptop's own NodeId (the one key allowed to connect)
-base64 ci-runner.key                     # copy this blob
+swoosh mint ci-runner        # → prints an authkey, and records the contact me/ci-runner
 ```
+That's it — `mint` derives the runner's identity and saves how to reach it (`me/ci-runner`) in one step.
 In the repo settings:
-- **Secret** `THEIA_CI_KEY` = the base64 blob above (the runner's identity).
-- **Variable** `LAPTOP_ID` = your laptop's NodeId (from `swoosh identity`).
+- **Secret** `THEIA_AUTHKEY` = the authkey `mint` printed (it carries the runner's device seed).
 
 ## Use it
 ```yaml
-- uses: theia-hq/swoosh-action@v1
+- uses: theia-hq/swoosh-action@v2
   with:
-    key: ${{ secrets.THEIA_CI_KEY }}
-    allow: ${{ vars.LAPTOP_ID }}
+    authkey: ${{ secrets.THEIA_AUTHKEY }}
     minutes: 20
 ```
 Trigger the workflow (`gh workflow run debug-ssh.yml`), then from your laptop:
 ```sh
-swoosh ssh ci-runner
+swoosh ssh me/ci-runner
 ```
 You're shelled into the runner, across GitHub's NAT, by a name you chose before it booted — and you
 never touched an ssh key.
 
 ## Rotate
-The runner's identity is disposable: mint a fresh `ci-runner.key` per use or per repo. The final form
-(theia HD identity, P10) will let you *derive* it from your user key by label, so you hand a scoped token
-instead of a raw secret.
+The runner's identity is disposable: `swoosh mint` a fresh authkey per use or per repo. Because the
+authkey carries only a *derived* device seed (not your signet), a leaked one compromises that one runner,
+never your root key — and you can revoke it.
 
 ## How it stays safe
-- **Keyless, but gated** — the shell (`sshd:`) has no auth of its own, so `allow` is required: only your
-  laptop NodeId may open a session. tightbeam refuses to expose `sshd:` publicly for this reason.
+- **Keyless, but gated by membership** — the shell (`sshd:`) has no auth of its own, so it is exposed
+  behind the family gate: only devices and delegates of the signet the runner adopted may open a session.
+  tightbeam refuses to expose `sshd:` with `--public` for exactly this reason.
 - **Log-safety by design** — `tightbeam expose --quiet`, so the NodeId is never printed; it can't leak
   into a public log via a stray `cat`, not just a redirect.
 - **Liveness + early release** — the hold checks the shell is alive (fails fast if it died) and watches
@@ -58,4 +57,6 @@ instead of a raw secret.
 
 ## Still to do
 - **Signed release binaries** — the install verifies a checksum, but the binaries are not yet signed.
+- **Authkey off argv** — `swoosh adopt` takes the authkey as an argument, so it is briefly visible in the
+  runner's process list; a stdin/file form would remove even that (fine on a single-tenant runner today).
 - **Cold Newcomer pass** — a stranger drops it in and gets a shell, with no prior context.

@@ -1,20 +1,17 @@
 # The flagship Action: expose a GitHub runner's shell over the theia overlay — with no SSH keys to manage.
-# `uses: theia-hq/swoosh-action@v1` in any workflow, then `swoosh ssh <your-contact>` into the runner.
-# The shell is a keyless SSH server (the sshh crate): it has no ssh keys of its own. The only thing that
-# can open a session is the NodeId you name in `allow`, so that capability IS the authentication.
+# `uses: theia-hq/swoosh-action@v2` in any workflow, then `swoosh ssh me/<label>` into the runner.
+# The shell is a keyless SSH server (the sshh crate): it has no ssh keys of its own. What authorizes a
+# session is MEMBERSHIP — the runner adopts your signet, so its family gate admits your devices, and you
+# dial with a badge your key self-signs. That capability IS the authentication.
 name: swoosh-ssh
-description: Expose this runner's keyless shell over the theia overlay, reachable by public key across GitHub's NAT.
+description: Expose this runner's keyless shell over the theia overlay, reachable by membership across GitHub's NAT.
 
 inputs:
-  key:
+  authkey:
     description: >
-      base64 of a PRE-MINTED key file (`swoosh identity --key k.key && base64 k.key`). The runner adopts
-      this identity; you saved its NodeId as a contact in advance. Pass a GitHub SECRET.
-    required: true
-  allow:
-    description: >
-      your laptop's NodeId (`swoosh identity`). REQUIRED — only this key may open a session to the runner,
-      and since the shell is keyless that capability is the authentication (there is no ssh key behind it).
+      A one-time authkey minted on your laptop (`swoosh mint <label>`). The runner ADOPTS it to become that
+      derived device identity AND to trust your signet — so your family gate admits you by membership, with
+      no per-key allowlist. A SECRET (it carries the device seed): pass a GitHub secret.
     required: true
   minutes:
     description: max minutes to hold the runner open. `touch $RUNNER_TEMP/theia-release` (over ssh) to end early.
@@ -24,40 +21,41 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: install tightbeam (checksum-verified)
+    - name: install swoosh + tightbeam (checksum-verified)
       shell: bash
       run: |
         set -euo pipefail
-        # The runner only needs tightbeam (to expose the shell); swoosh is a laptop-side tool, so it is
-        # not installed here. SIGNING the asset is still TODO. Always verify a checksum, never `curl | sudo`.
+        # The runner needs swoosh (to `adopt` the authkey) and tightbeam (to expose the keyless shell).
+        # SIGNING the assets is still TODO. Always verify a checksum, never `curl | sudo`.
         os=$(uname -s | tr '[:upper:]' '[:lower:]'); case "$os" in darwin) os=macos ;; esac
-        arch=$(uname -m); case "$arch" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; esac
-        asset="tightbeam-$arch-$os"
-        base=https://github.com/theia-hq/tightbeam/releases/latest/download
-        sudo curl -fsSL "$base/$asset" -o /usr/local/bin/tightbeam
-        curl -fsSL "$base/$asset.sha256" -o /tmp/tightbeam.sha256
-        echo "$(cat /tmp/tightbeam.sha256)  /usr/local/bin/tightbeam" | shasum -a 256 -c -
-        sudo chmod +x /usr/local/bin/tightbeam
+        arch=$(uname -m); case "$arch" in amd64|x86_64) arch=x86_64 ;; arm64|aarch64) arch=aarch64 ;; esac
+        get() { # <repo> <binary>: fetch the released binary + its checksum, verify, install
+          local repo="$1" bin="$2" asset="$2-$arch-$os"
+          local base="https://github.com/theia-hq/$repo/releases/latest/download"
+          sudo curl -fsSL "$base/$asset" -o "/usr/local/bin/$bin"
+          curl -fsSL "$base/$asset.sha256" -o "/tmp/$bin.sha256"
+          echo "$(cat "/tmp/$bin.sha256")  /usr/local/bin/$bin" | shasum -a 256 -c -
+          sudo chmod +x "/usr/local/bin/$bin"
+        }
+        get swoosh swoosh
+        get tightbeam tightbeam
 
-    - name: adopt identity and expose a keyless shell over the overlay
+    - name: adopt your signet and expose a keyless shell (family-gated)
       shell: bash
       env:
-        THEIA_KEY: ${{ inputs.key }}
-        ALLOW: ${{ inputs.allow }}
+        THEIA_AUTHKEY: ${{ inputs.authkey }}
       run: |
         set -euo pipefail
-        if [ -z "$ALLOW" ]; then
-          echo "::error::the 'allow' input is required: your laptop NodeId (swoosh identity)." >&2
-          exit 1
-        fi
-        printf '%s' "$THEIA_KEY" | base64 -d > "$RUNNER_TEMP/runner.key"
-        chmod 600 "$RUNNER_TEMP/runner.key"
-        # `sshd:` is a keyless shell with no auth of its own, so it MUST be gated: --allow names the one
-        # NodeId permitted to open a session. tightbeam refuses `sshd:` with --public for exactly this
-        # reason. --quiet: the NodeId is NEVER printed, so it cannot leak into the (public) log by design.
-        # Exposes over iroh (default): it self-publishes to discovery, reachable by key across the NAT.
-        TIGHTBEAM_KEY="$RUNNER_TEMP/runner.key" \
-          tightbeam expose ssh=sshd: --allow "$ALLOW" --quiet 2> "$RUNNER_TEMP/tightbeam.err" &
+        # Adopt the authkey: become the minted device identity AND record the signet this node trusts. This
+        # writes the tightbeam identity + the trusted-signet file the expose gate reads. (The authkey is on
+        # argv here; on a single-tenant ephemeral runner that is acceptable — a stdin/file form is a
+        # fast-follow.)
+        swoosh adopt "$THEIA_AUTHKEY"
+        # Expose the keyless shell behind the DEFAULT family gate (rooted at the adopted signet): only your
+        # devices and delegates can open a session — no per-key allowlist, and no --public (tightbeam
+        # refuses --public for sshd:, which has no auth of its own). --quiet: the NodeId is NEVER printed,
+        # so it cannot leak into the (public) log. Exposes over iroh, reachable by key across the NAT.
+        tightbeam expose ssh=sshd: --quiet 2> "$RUNNER_TEMP/tightbeam.err" &
         echo $! > "$RUNNER_TEMP/tightbeam.pid"
 
     - name: hold open (liveness + early release)
@@ -68,7 +66,7 @@ runs:
         set -uo pipefail
         pid=$(cat "$RUNNER_TEMP/tightbeam.pid")
         deadline=$(( SECONDS + MINUTES * 60 ))
-        echo "reachable over the overlay. on your laptop: swoosh ssh <your-contact>"
+        echo "reachable over the overlay. on your laptop: swoosh ssh me/<label>"
         echo "(early release: ssh in and 'touch $RUNNER_TEMP/theia-release')"
         while [ "$SECONDS" -lt "$deadline" ]; do
           if ! kill -0 "$pid" 2>/dev/null; then
