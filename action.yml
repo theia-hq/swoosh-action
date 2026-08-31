@@ -15,7 +15,7 @@ inputs:
     required: true
   services:
     description: >
-      the services to expose, space-separated `name=addr` (see `tightbeam expose`). Defaults to a keyless
+      the services to expose, space-separated `name=addr` (see `swoosh tunnel expose`). Defaults to a keyless
       shell. Add `fetch=fetch:` for HTTP egress you can `swoosh fetch --via` through, `web=127.0.0.1:8080`
       to forward a local port, `sock=unix:/path` for a unix socket, all behind the same family gate.
     required: false
@@ -56,7 +56,7 @@ runs:
       run: |
         set -euo pipefail
         # Adopt the authkey: become the minted device identity AND record the signet this node trusts. This
-        # writes the tightbeam identity + the trusted-signet file the expose gate reads. (The authkey is on
+        # writes swoosh's identity + the trusted-signet file the expose gate reads. (The authkey is on
         # argv here; on a single-tenant ephemeral runner that is acceptable (a stdin/file form is a
         # fast-follow.)
         swoosh adopt "$THEIA_AUTHKEY"
