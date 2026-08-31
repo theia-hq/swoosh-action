@@ -15,7 +15,7 @@ inputs:
     required: true
   services:
     description: >
-      the services to expose, space-separated `name=addr` (see `swoosh tunnel expose`). Defaults to a keyless
+      the services to expose, space-separated `name=addr` (see `swoosh serve`). Defaults to a keyless
       shell. Add `fetch=fetch:` for HTTP egress you can `swoosh fetch --via` through, `web=127.0.0.1:8080`
       to forward a local port, `sock=unix:/path` for a unix socket, all behind the same family gate.
     required: false
@@ -34,8 +34,8 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        # The runner needs only swoosh now: it `adopt`s the authkey AND exposes the services (`swoosh tunnel
-        # expose`), one binary, no `tightbeam` on PATH. Verify BOTH a checksum and the keyless build-provenance
+        # The runner needs only swoosh now: it `adopt`s the authkey AND serves the services (`swoosh
+        # serve`), one binary, no `tightbeam` on PATH. Verify BOTH a checksum and the keyless build-provenance
         # attestation before the binary ever runs: `gh attestation verify` proves it was built by theia-hq's
         # release workflow (sigstore/OIDC), so a swapped release binary is refused. Never `curl | sudo` blind.
         os=$(uname -s | tr '[:upper:]' '[:lower:]'); case "$os" in darwin) os=macos ;; esac
@@ -48,7 +48,7 @@ runs:
         gh attestation verify "$RUNNER_TEMP/swoosh" --repo theia-hq/swoosh
         sudo install -m 0755 "$RUNNER_TEMP/swoosh" /usr/local/bin/swoosh
 
-    - name: adopt your signet and expose the services (family-gated)
+    - name: adopt your signet and serve the services (family-gated)
       shell: bash
       env:
         THEIA_AUTHKEY: ${{ inputs.authkey }}
@@ -56,16 +56,17 @@ runs:
       run: |
         set -euo pipefail
         # Adopt the authkey: become the minted device identity AND record the signet this node trusts. This
-        # writes swoosh's identity + the trusted-signet file the expose gate reads. (The authkey is on
+        # writes swoosh's identity + the trusted-signet file the serve gate reads. (The authkey is on
         # argv here; on a single-tenant ephemeral runner that is acceptable (a stdin/file form is a
         # fast-follow.)
         swoosh adopt "$THEIA_AUTHKEY"
-        # Expose the requested services behind the DEFAULT family gate (rooted at the adopted signet): only
-        # your devices and delegates can reach any of them, no per-key allowlist, and no --public (expose
-        # refuses --public for sshd:, which has no auth of its own). --quiet: the NodeId is NEVER printed, so
-        # it cannot leak into the (public) log. Exposes over iroh, reachable by key across the NAT.
+        # Serve the requested services behind the DEFAULT family gate (rooted at the adopted signet): only
+        # your devices and delegates can reach any of them, no per-key allowlist, and no --public (serve
+        # refuses --public for sshd:, a keyless shell has no legitimate public use). --quiet: the readiness
+        # banner (node id, services, gate) is NEVER printed, so it cannot leak into the (public) log. Serves
+        # over iroh, reachable by key across the NAT.
         read -ra SERVICES <<< "$THEIA_SERVICES"
-        swoosh tunnel expose "${SERVICES[@]}" --quiet 2> "$RUNNER_TEMP/expose.err" &
+        swoosh serve "${SERVICES[@]}" --quiet 2> "$RUNNER_TEMP/expose.err" &
         echo $! > "$RUNNER_TEMP/expose.pid"
 
     - name: hold open (liveness + early release)
