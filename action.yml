@@ -22,9 +22,13 @@ inputs:
     required: false
     default: "ssh=sshd: ping=ping: speed=speed:"
   minutes:
-    description: max minutes to hold the runner open. `touch $RUNNER_TEMP/theia-release` (over ssh) to end early.
+    description: >
+      hold the job open this many minutes so the node stays reachable for external or interactive use (ssh
+      in, do your thing, then it stops). OMIT to run non-blocking: the node serves in the background and the
+      workflow ADVANCES to your next steps, staying reachable until the job ends (the tailscale shape). End a
+      hold early with `touch $RUNNER_TEMP/theia-release` (over ssh); `swoosh stop` will replace that once built.
     required: false
-    default: "10"
+    default: ""
 
 runs:
   using: composite
@@ -69,8 +73,23 @@ runs:
         read -ra SERVICES <<< "$THEIA_SERVICES"
         swoosh serve "${SERVICES[@]}" --quiet 2> "$RUNNER_TEMP/expose.err" &
         echo $! > "$RUNNER_TEMP/expose.pid"
+        # Fail fast: give serve a moment, then verify it is alive, so a dead node (bad authkey, gate, port)
+        # surfaces HERE with the key redacted, not silently in a later step. The serve is backgrounded, so it
+        # persists past this step; a `minutes` hold below monitors it, and without one the job's own next
+        # steps run against a reachable node until the job ends (the non-blocking, tailscale-shaped default).
+        sleep 2
+        if ! kill -0 "$(cat "$RUNNER_TEMP/expose.pid")" 2>/dev/null; then
+          echo "::error::swoosh serve exited immediately." >&2
+          sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/expose.err" >&2 || true
+          exit 1
+        fi
+        echo "node reachable over the overlay by key. from your laptop: swoosh ssh me/<label> (or ping/speed/fetch)."
 
-    - name: hold open (liveness + early release)
+    # Only when `minutes` is set: hold the job open so the node stays reachable for external or interactive
+    # use. Omitted, the action is non-blocking (the tailscale shape): the workflow advances to your next
+    # steps and the node stays up until the job ends.
+    - name: hold the job open for interactive use
+      if: ${{ inputs.minutes != '' }}
       shell: bash
       env:
         MINUTES: ${{ inputs.minutes }}
@@ -78,11 +97,10 @@ runs:
         set -uo pipefail
         pid=$(cat "$RUNNER_TEMP/expose.pid")
         deadline=$(( SECONDS + MINUTES * 60 ))
-        echo "reachable over the overlay. on your laptop: swoosh ssh me/<label>"
-        echo "(early release: ssh in and 'touch $RUNNER_TEMP/theia-release')"
+        echo "holding open for ${MINUTES}m. early release: ssh in and 'touch $RUNNER_TEMP/theia-release' (swoosh stop will replace this)."
         while [ "$SECONDS" -lt "$deadline" ]; do
           if ! kill -0 "$pid" 2>/dev/null; then
-            echo "::error::the overlay shell exited before the hold ended." >&2
+            echo "::error::the node exited before the hold ended." >&2
             # Surface the failure WITHOUT the key: redact anything that looks like a node id.
             sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/expose.err" >&2 || true
             exit 1
