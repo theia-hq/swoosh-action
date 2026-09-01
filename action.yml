@@ -4,7 +4,7 @@
 # session is MEMBERSHIP: the runner adopts your signet, so its family gate admits your devices, and you
 # dial with a badge your key self-signs. That capability IS the authentication.
 name: swoosh-ssh
-description: Expose this runner's keyless shell over the theia overlay, reachable by membership across GitHub's NAT.
+description: Expose this runner as a theia node (keyless shell + ping/speed by default, more on request) over the overlay, reachable by membership across GitHub's NAT.
 
 inputs:
   authkey:
@@ -15,11 +15,12 @@ inputs:
     required: true
   services:
     description: >
-      the services to expose, space-separated `name=addr` (see `swoosh serve`). Defaults to a keyless
-      shell. Add `fetch=fetch:` for HTTP egress you can `swoosh fetch --via` through, `web=127.0.0.1:8080`
-      to forward a local port, `sock=unix:/path` for a unix socket, all behind the same family gate.
+      the services to expose, space-separated `name=addr` (see `swoosh serve`). Defaults to a full node:
+      a keyless shell plus `ping`/`speed` diagnostics. Add `fetch=fetch:` for HTTP egress you can `swoosh
+      fetch --via` through, `web=127.0.0.1:8080` to forward a local port, `sock=unix:/path` for a unix
+      socket, all behind the same family gate.
     required: false
-    default: "ssh=sshd:"
+    default: "ssh=sshd: ping=ping: speed=speed:"
   minutes:
     description: max minutes to hold the runner open. `touch $RUNNER_TEMP/theia-release` (over ssh) to end early.
     required: false
