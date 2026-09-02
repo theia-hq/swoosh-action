@@ -36,16 +36,47 @@ In the repo settings:
 - uses: theia-hq/swoosh-action@v2
   with:
     authkey: ${{ secrets.THEIA_AUTHKEY }}
-    services: ssh=sshd: fetch=fetch:   # default is ssh=sshd:; name any set you want served
-    minutes: 20
 ```
-Trigger the workflow (`gh workflow run debug-ssh.yml`), then from your laptop reach whatever it serves:
+Trigger the workflow, then from your laptop reach whatever it serves:
 ```sh
-swoosh ssh me/ci-runner                       # a shell in the runner
-swoosh fetch https://example.com --via me/ci-runner   # fetch from the runner's network
+swoosh ssh me/ci-runner                                # a shell in the runner
+swoosh ping me/ci-runner                               # round-trip time
+swoosh speed me/ci-runner                              # throughput
 ```
 You're on the runner across GitHub's NAT, by a name you chose before it booted, and you never touched an
 ssh key.
+
+## Inputs
+
+| input | required | default | what it is |
+| ----- | -------- | ------- | ---------- |
+| `authkey` | yes | — | the authkey `swoosh mint` printed. The runner adopts it to become that device and trust your signet. A secret. |
+| `services` | no | `ssh=sshd: ping=ping: speed=speed:` | the services to serve (below). |
+| `minutes` | no | — | hold the job open this many minutes for interactive use. Omit to run non-blocking (below). |
+
+### `services`
+Space-separated `name=addr` pairs. The default serves a full node: a keyless shell (`ssh=sshd:`) plus
+`ping`/`speed` link diagnostics. Name your own set to add or drop services:
+
+```yaml
+services: ssh=sshd: fetch=fetch: web=127.0.0.1:8080
+```
+
+- `fetch=fetch:` — HTTP egress you can `swoosh fetch --via me/<label> <url>` through (fetched by the runner, streamed back).
+- `beam=beam:` — receive files pushed to the runner.
+- `web=127.0.0.1:8080` — forward a local port on the runner.
+- `sock=unix:/path` — forward a unix socket.
+
+Every service is served behind the same family gate: only devices and delegates of the signet the runner
+adopted can reach any of them. (See `swoosh serve` for the full addr grammar.)
+
+### `minutes`
+- **Omitted (non-blocking):** the node serves in the background, the workflow advances to your next
+  steps, and the node stays reachable until the job ends.
+- **`minutes: N`:** hold the job open for N minutes so you can ssh in, do your thing, then it stops.
+
+End a held session early from your laptop with `swoosh stop me/<label>`, which reaches the runner's gated
+control service and tears it down.
 
 ## Rotate
 The runner's identity is disposable: `swoosh mint` a fresh authkey per use or per repo. Because the
@@ -58,13 +89,12 @@ never your root key, and you can revoke it.
   swoosh refuses to serve it with `--public` at all.
 - **Log-safety by design.** The runner serves with `--quiet`, so the NodeId is never printed; it can't
   leak into a public log via a stray `cat`, not just a redirect.
-- **Liveness + early release.** The hold checks a served service is alive (fails fast if it died) and
-  watches for `touch $RUNNER_TEMP/theia-release` to end early, instead of a blind `sleep`.
-- **Checksum-verified install.** The `swoosh` binary is downloaded from its GitHub Releases and checked
-  against the published `.sha256`, never a bare `curl | sudo`.
+- **Liveness check.** The hold verifies a served service is alive and fails fast if it died, instead of a
+  blind `sleep`.
+- **Checksum + provenance install.** The `swoosh` binary is downloaded from its GitHub Releases, checked
+  against the published `.sha256`, and its build-provenance attestation verified, never a bare `curl | sudo`.
 
 ## Still to do
-- **Signed release binaries.** The install verifies a checksum, but the binaries are not yet signed.
 - **Authkey off argv.** `swoosh adopt` takes the authkey as an argument, so it is briefly visible in the
   runner's process list; a stdin/file form would remove even that (fine on a single-tenant runner today).
 - **Cold Newcomer pass.** A stranger drops it in and gets a shell, with no prior context.

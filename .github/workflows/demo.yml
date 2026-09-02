@@ -1,10 +1,14 @@
 name: swoosh-ssh-demo
-# Manually-triggered demo: bring this runner up reachable by `swoosh ssh` over the theia overlay.
+# Manually-triggered demo: bring this runner up as a node reachable over the theia overlay.
 #
-# Set on this repo first:
-#   secret THEIA_KEY   base64 of a tightbeam key file (the runner's pre-minted identity)
-#   variable ALLOW     your laptop's NodeId (the only key allowed to open a session; it is the auth)
-# Then:  gh workflow run demo.yml   and on your laptop:  swoosh ssh <runner-NodeId>
+# Set on this repo first (on your laptop):
+#   swoosh mint ci-runner                    mints an authkey and records the contact me/ci-runner
+#   gh secret set THEIA_AUTHKEY              paste the authkey
+# The runner adopts the authkey: it becomes that device and trusts your signet, so its family gate
+# admits your devices and delegates by membership (no per-key allowlist).
+#
+# Then:  gh workflow run demo.yml
+# On your laptop, once the run is up:  swoosh ssh me/ci-runner
 on:
   workflow_dispatch: {}
 jobs:
@@ -14,6 +18,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./
         with:
-          key: ${{ secrets.THEIA_KEY }}
-          allow: ${{ vars.ALLOW }}
+          authkey: ${{ secrets.THEIA_AUTHKEY }}
           minutes: "10"
