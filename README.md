@@ -27,6 +27,9 @@ nothing is read back from a log.)
 ```sh
 swoosh mint ci-runner        # → prints an authkey, and records the contact me/ci-runner
 ```
+A minted badge lasts 90 days unless you pass `--expires`. For a long-lived runner mint long:
+`swoosh mint ci-runner --expires 365d`. See
+[`swoosh mint`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands.md#mint).
 That's it: `mint` derives the runner's identity and saves how to reach it (`me/ci-runner`) in one step.
 In the repo settings:
 - **Secret** `THEIA_AUTHKEY` = the authkey `mint` printed (it carries the runner's device seed).
