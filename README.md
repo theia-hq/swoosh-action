@@ -60,14 +60,15 @@ ssh key.
 
 ### `services`
 Space-separated `name=addr` pairs. The default serves a full node: a keyless shell (`ssh=sshd:`) plus
-`ping`/`speed` link diagnostics. Name your own set to add or drop services:
+`ping=ping:`/`speed=speed:` link diagnostics. Every entry must be `name=addr`: a bare `ping` or `ping:` is
+refused. Name your own set to add or drop services:
 
 ```yaml
-services: ssh=sshd: fetch=fetch: web=127.0.0.1:8080
+services: ssh=sshd: news=fetch:https://news.example web=127.0.0.1:8080
 ```
 
-- `fetch=fetch:` — HTTP egress you can `swoosh fetch --via me/<label> <url>` through (fetched by the runner, streamed back).
-- `recv=recv:<dir>` — receive files pushed to the runner (a bare `recv:` writes to `.`).
+- `news=fetch:<origin>` — HTTP egress you can `swoosh fetch --via me/<label> <url>` through (fetched by the runner, streamed back).
+- `inbox=recv:<dir>` — receive files pushed to the runner (`inbox=recv:` writes to `.`).
 - `web=127.0.0.1:8080` — forward a local port on the runner.
 - `sock=unix:/path` — forward a unix socket.
 

@@ -16,9 +16,11 @@ inputs:
   services:
     description: >
       the services to expose, space-separated `name=addr` (see `swoosh serve`). Defaults to a full node:
-      a keyless shell plus `ping`/`speed` diagnostics. Add `fetch=fetch:` for HTTP egress you can `swoosh
+      a keyless shell plus `ping=ping:`/`speed=speed:` diagnostics (`ssh=sshd: ping=ping: speed=speed:`).
+      Add `fetch=fetch:` for HTTP egress you can `swoosh
       fetch --via` through, `web=127.0.0.1:8080` to forward a local port, `sock=unix:/path` for a unix
-      socket, all behind the same family gate.
+      socket, all behind the same family gate. Every entry must be `name=addr`: a bare `ping` or `ping:`
+      is refused.
     required: false
     default: "ssh=sshd: ping=ping: speed=speed:"
   minutes:
@@ -26,7 +28,7 @@ inputs:
       hold the job open this many minutes so the node stays reachable for external or interactive use (ssh
       in, do your thing, then it stops). OMIT to run non-blocking: the node serves in the background and the
       workflow ADVANCES to your next steps, staying reachable until the job ends (the tailscale shape). End a
-      hold early with `touch $RUNNER_TEMP/theia-release` (over ssh); `swoosh stop` will replace that once built.
+      hold early with `swoosh stop --at me/<label>` from your laptop.
     required: false
     default: ""
   version:
@@ -113,15 +115,21 @@ runs:
         set -uo pipefail
         pid=$(cat "$RUNNER_TEMP/expose.pid")
         deadline=$(( SECONDS + MINUTES * 60 ))
-        echo "holding open for ${MINUTES}m. early release: ssh in and 'touch $RUNNER_TEMP/theia-release' (swoosh stop will replace this)."
+        echo "holding open for ${MINUTES}m. early release: swoosh stop --at me/<label> from your laptop."
         while [ "$SECONDS" -lt "$deadline" ]; do
           if ! kill -0 "$pid" 2>/dev/null; then
-            echo "::error::the node exited before the hold ended." >&2
-            # Surface the failure WITHOUT the key: redact anything that looks like a node id.
-            sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/expose.err" >&2 || true
-            exit 1
+            break
           fi
-          if [ -e "$RUNNER_TEMP/theia-release" ]; then echo "released early."; break; fi
           sleep 5
         done
+        # Deadline expiry with a live pid: stop the node locally first, then reap. Early remote stop
+        # already killed the pid, so this kill is a no-op via || true and wait returns its code.
         kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null
+        code=$?
+        if [ "$code" -ne 0 ]; then
+          echo "::error::the node exited before the hold ended." >&2
+          sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/expose.err" >&2 || true
+          exit "$code"
+        fi
+        echo "released early."
