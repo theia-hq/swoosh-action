@@ -79,7 +79,7 @@ adopted can reach any of them. (See `swoosh serve` for the full addr grammar.)
   steps, and the node stays reachable until the job ends.
 - **`minutes: N`:** hold the job open for N minutes so you can ssh in, do your thing, then it stops.
 
-End a held session early from your laptop with `swoosh stop me/<label>`, which reaches the runner's gated
+End a held session early from your laptop with `swoosh stop --at me/<label>`, which reaches the runner's gated
 control service and tears it down.
 
 ## Rotate
