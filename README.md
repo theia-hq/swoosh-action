@@ -53,6 +53,7 @@ ssh key.
 | `authkey` | yes | — | the authkey `swoosh mint` printed. The runner adopts it to become that device and trust your signet. A secret. |
 | `services` | no | `ssh=sshd: ping=ping: speed=speed:` | the services to serve (below). |
 | `minutes` | no | — | hold the job open this many minutes for interactive use. Omit to run non-blocking (below). |
+| `version` | no | `latest` | the swoosh release to install: `latest` or a pinned tag (e.g. `v2`). |
 
 ### `services`
 Space-separated `name=addr` pairs. The default serves a full node: a keyless shell (`ssh=sshd:`) plus
@@ -63,7 +64,7 @@ services: ssh=sshd: fetch=fetch: web=127.0.0.1:8080
 ```
 
 - `fetch=fetch:` — HTTP egress you can `swoosh fetch --via me/<label> <url>` through (fetched by the runner, streamed back).
-- `beam=beam:` — receive files pushed to the runner.
+- `recv=recv:<dir>` — receive files pushed to the runner (a bare `recv:` writes to `.`).
 - `web=127.0.0.1:8080` — forward a local port on the runner.
 - `sock=unix:/path` — forward a unix socket.
 
@@ -95,6 +96,4 @@ never your root key, and you can revoke it.
   against the published `.sha256`, and its build-provenance attestation verified, never a bare `curl | sudo`.
 
 ## Still to do
-- **Authkey off argv.** `swoosh adopt` takes the authkey as an argument, so it is briefly visible in the
-  runner's process list; a stdin/file form would remove even that (fine on a single-tenant runner today).
 - **Cold Newcomer pass.** A stranger drops it in and gets a shell, with no prior context.

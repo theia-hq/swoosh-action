@@ -29,6 +29,13 @@ inputs:
       hold early with `touch $RUNNER_TEMP/theia-release` (over ssh); `swoosh stop` will replace that once built.
     required: false
     default: ""
+  version:
+    # FLAG(CLI-Architect): input name `version`, values `latest` or a release tag, default `latest`.
+    description: >
+      the swoosh release to install: `latest` (the newest release) or a pinned release tag (e.g. `v2`).
+      Pin for reproducible runs; `latest` for always-current.
+    required: false
+    default: "latest"
 
 runs:
   using: composite
@@ -37,16 +44,22 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        SWOOSH_REF: ${{ inputs.version }}
       run: |
         set -euo pipefail
         # The runner needs only swoosh now: it `adopt`s the authkey AND serves the services (`swoosh
         # serve`), one binary, no `tightbeam` on PATH. Verify BOTH a checksum and the keyless build-provenance
         # attestation before the binary ever runs: `gh attestation verify` proves it was built by theia-hq's
         # release workflow (sigstore/OIDC), so a swapped release binary is refused. Never `curl | sudo` blind.
+        # `latest` installs the newest release; a pinned tag installs that tag for reproducible runs.
         os=$(uname -s | tr '[:upper:]' '[:lower:]'); case "$os" in darwin) os=macos ;; esac
         arch=$(uname -m); case "$arch" in amd64|x86_64) arch=x86_64 ;; arm64|aarch64) arch=aarch64 ;; esac
         asset="swoosh-$arch-$os"
-        base="https://github.com/theia-hq/swoosh/releases/latest/download"
+        if [ "$SWOOSH_REF" = "latest" ]; then
+          base="https://github.com/theia-hq/swoosh/releases/latest/download"
+        else
+          base="https://github.com/theia-hq/swoosh/releases/download/$SWOOSH_REF"
+        fi
         curl -fsSL "$base/$asset" -o "$RUNNER_TEMP/swoosh"
         curl -fsSL "$base/$asset.sha256" -o "$RUNNER_TEMP/swoosh.sha256"
         echo "$(cat "$RUNNER_TEMP/swoosh.sha256")  $RUNNER_TEMP/swoosh" | shasum -a 256 -c -
@@ -56,15 +69,18 @@ runs:
     - name: adopt your signet and serve the services (family-gated)
       shell: bash
       env:
-        THEIA_AUTHKEY: ${{ inputs.authkey }}
+        SWOOSH_AUTHKEY: ${{ inputs.authkey }}
         THEIA_SERVICES: ${{ inputs.services }}
       run: |
         set -euo pipefail
-        # Adopt the authkey: become the minted device identity AND record the signet this node trusts. This
-        # writes swoosh's identity + the trusted-signet file the serve gate reads. (The authkey is on
-        # argv here; on a single-tenant ephemeral runner that is acceptable (a stdin/file form is a
-        # fast-follow.)
-        swoosh adopt "$THEIA_AUTHKEY"
+        # Adopt the authkey off argv: `swoosh adopt -` reads stdin, so the secret never appears in `ps` or
+        # `/proc/<pid>/cmdline`. (`adopt` also accepts `@<path>` for a file; `SWOOSH_AUTHKEY` is the same
+        # value, taken verbatim, for callers who prefer the environment.)
+        # FLAG(Adversary): the stdin pipe closes the argv leak but the secret still rides the `SWOOSH_AUTHKEY`
+        # env var into this step (visible in /proc/<pid>/environ to co-tenants, inherited by spawned
+        # children). Matches what `swoosh adopt` documents for the env form; a file (`@<path>`) input is
+        # the further close if wanted.
+        printf '%s' "$SWOOSH_AUTHKEY" | swoosh adopt -
         # Serve the requested services behind the DEFAULT family gate (rooted at the adopted signet): only
         # your devices and delegates can reach any of them, no per-key allowlist, and no --public (serve
         # refuses --public for sshd:, a keyless shell has no legitimate public use). --quiet: the readiness
