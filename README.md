@@ -67,10 +67,10 @@ refused. Name your own set to add or drop services:
 services: ssh=sshd: news=fetch:https://news.example web=127.0.0.1:8080
 ```
 
-- `news=fetch:<origin>` — HTTP egress you can `swoosh fetch --via me/<label> <url>` through (fetched by the runner, streamed back).
-- `inbox=recv:<dir>` — receive files pushed to the runner (`inbox=recv:` writes to `.`).
-- `web=127.0.0.1:8080` — forward a local port on the runner.
-- `sock=unix:/path` — forward a unix socket.
+- `news=fetch:<origin>` (HTTP egress you can `swoosh fetch --via me/<label> <url>` through, fetched by the runner, streamed back).
+- `inbox=recv:<dir>` (receive files pushed to the runner; `inbox=recv:` writes to `.`).
+- `web=127.0.0.1:8080` (forward a local port on the runner).
+- `sock=unix:/path` (forward a unix socket).
 
 Every service is served behind the same family gate: only devices and delegates of the signet the runner
 adopted can reach any of them. (See `swoosh serve` for the full addr grammar.)
