@@ -1,43 +1,18 @@
 # swoosh-action
 
 A GitHub Action that turns a CI runner into a node you reach by its public key: across GitHub's NAT, with
-no port-forward, no SSH keys to manage, and nothing session-identifying in the logs.
+no port-forward and no SSH keys to manage.
 
-Behind the runner's gate you serve whatever you name: a keyless shell, HTTP fetch, link diagnostics. ssh
-is the headline (`swoosh ssh me/<label>` into the runner), but it is one service of several, and you
-choose the set. Only your own devices and delegates can reach any of them.
+Mint the runner's name on your laptop before the runner exists, then dial `me/ci-runner` while the job
+runs. The node serves the services you choose behind a gate that admits only your own devices and the
+delegates you grant. The shell it serves is keyless: an SSH server opened by membership, not by an SSH
+key.
 
-**The name.** The runner becomes a node you drive with [`swoosh`](https://github.com/theia-hq/swoosh):
-one command to reach it by key and use the services it serves.
+## Quickstart
 
-## The idea
-You `mint` the runner's identity on your laptop: one command that both derives the runner's identity
-*before the runner exists* and records the name you'll reach it by. The runner adopts that authkey from a
-secret: it becomes the derived device **and** trusts your signet. Then it serves its services over the
-overlay behind the default family gate. You reach each by membership from your laptop.
+This workflow serves the default set (a keyless shell, `ping`, and `speed`) and holds the runner open for
+30 minutes:
 
-The headline service is a **keyless shell** (an SSH server with no keys of its own). There is no ssh
-password or authorized key behind it. What opens a session is **membership**: the runner trusts your
-signet, so its family gate admits your devices, and your key self-signs a short-lived badge when you dial.
-That capability is the authentication. This is why the repo can stay public: the authkey is a secret, gh
-redacts node ids, and only a member of your signet can reach any service. (Unlike tmate / "print a URL",
-nothing is read back from a log.)
-
-## One-time setup (on your laptop)
-**Prerequisite:** the [`swoosh`](https://github.com/theia-hq/swoosh) client on your laptop (grab a binary
-from its [releases](https://github.com/theia-hq/swoosh/releases)).
-
-```sh
-swoosh mint ci-runner        # → prints an authkey, and records the contact me/ci-runner
-```
-A minted badge lasts 90 days unless you pass `--expires`. For a long-lived runner mint long:
-`swoosh mint ci-runner --expires 365d`. See
-[`swoosh mint`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands.md#mint).
-That's it: `mint` derives the runner's identity and saves how to reach it (`me/ci-runner`) in one step.
-In the repo settings:
-- **Secret** `THEIA_AUTHKEY` = the authkey `mint` printed (it carries the runner's device seed).
-
-## Use it
 ```yaml
 name: swoosh
 on:
@@ -49,72 +24,193 @@ jobs:
       - uses: theia-hq/swoosh-action@v2
         with:
           authkey: ${{ secrets.THEIA_AUTHKEY }}
-          # hold the job open so you can reach it; omit to run non-blocking
           minutes: 30
 ```
-Trigger the workflow, then from your laptop reach whatever it serves:
-```sh
-swoosh ssh me/ci-runner                                # a shell in the runner
-swoosh ping me/ci-runner                               # round-trip time
-swoosh speed me/ci-runner                              # throughput
-```
-You're on the runner across GitHub's NAT, by a name you chose before it booted, and you never touched an
-ssh key.
 
-## Inputs
+`authkey` is required. The runner adopts it to become the device identity
+[`swoosh mint`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/mint.md) derived and
+to trust the root key that minted it (your signet), so its gate admits your devices and the delegates you
+grant. The authkey carries a device seed: keep it in a repository secret, never in the workflow file.
+[Prerequisites](#prerequisites) has the commands that produce it.
 
-| input | required | default | what it is |
-| ----- | -------- | ------- | ---------- |
-| `authkey` | yes | none | the authkey `swoosh mint` printed. The runner adopts it to become that device and trust your signet. A secret. |
-| `services` | no | `ssh=sshd: ping=ping: speed=speed:` | the services to serve (below). |
-| `minutes` | no | none | hold the job open this many minutes for interactive use. Omit to run non-blocking (below). |
-| `version` | no | `latest` | the swoosh release to install: `latest` or a pinned tag (e.g. `v2`). |
+`services` is optional and defaults to `ssh=sshd: ping=ping: speed=speed:`.
+[Serve more than a shell](#serve-more-than-a-shell) has the grammar, examples, and reference links.
 
-### `services`
-Space-separated `name=addr` pairs. The default serves a full node: a keyless shell (`ssh=sshd:`) plus
-`ping=ping:`/`speed=speed:` link diagnostics. Every entry must be `name=addr`: a bare `ping` or `ping:` is
-refused. Name your own set to add or drop services:
+`minutes` is optional and unset by default. Set it to hold the job open while you work on the runner.
+[Hold the job open](#hold-the-job-open) covers what happens without it and how to end a hold early.
+
+`version` is optional and defaults to `latest`, the newest swoosh release. Set a release tag such as
+`v0.8.0` to pin it. [Choose the swoosh version](#choose-the-swoosh-version) covers the install check.
+
+## Prerequisites
+
+1. A laptop with the [`swoosh`](https://github.com/theia-hq/swoosh) client installed and your signet on
+   it. Get a binary from the [releases](https://github.com/theia-hq/swoosh/releases) page.
+2. The authkey: run `swoosh mint ci-runner` on that laptop. It prints the authkey and records the contact
+   `me/ci-runner`, the name you dial later.
+3. A GitHub repository you can set secrets on. Run `gh secret set THEIA_AUTHKEY`, paste the authkey, and
+   pass it as `${{ secrets.THEIA_AUTHKEY }}` in the workflow.
+4. A Linux or macOS runner. GitHub-hosted runners need no setup. A self-hosted runner needs the `gh` CLI
+   on `PATH`, because the install step verifies the binary's provenance with `gh attestation verify`.
+
+## Serve more than a shell
+
+Every entry is `name=target`, space-separated; a bare `ping` or `ping:` is refused. Replace the default
+set to add the services you need:
 
 ```yaml
-services: "ssh=sshd: news=fetch:https://news.example web=127.0.0.1:8080"
+- uses: theia-hq/swoosh-action@v2
+  with:
+    authkey: ${{ secrets.THEIA_AUTHKEY }}
+    services: "ssh=sshd: fetch=fetch:https://news.example web=127.0.0.1:8080 sock=unix:/path"
 ```
 
-- `news=fetch:<origin>` (HTTP egress you can `swoosh fetch --via me/<label> <url>` through, fetched by the runner, streamed back).
-- `inbox=recv:<dir>` (receive files pushed to the runner; `inbox=recv:` writes to `.`).
-- `web=127.0.0.1:8080` (forward a local port on the runner).
-- `sock=unix:/path` (forward a unix socket).
+Every service sits behind the same gate, and the keyless shell has no public form: `swoosh serve` refuses
+`--public` for `sshd:`. The set you can serve depends on the swoosh release the action installs
+([Choose the swoosh version](#choose-the-swoosh-version) pins it). The
+[services catalog](https://github.com/theia-hq/swoosh/blob/main/docs/reference/services.md) lists every
+target and how it is gated, and
+[`swoosh serve`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/serve.md) has the
+full `name=target` grammar.
 
-Every service is served behind the same family gate: only devices and delegates of the signet the runner
-adopted can reach any of them. (See `swoosh serve` for the full addr grammar.)
+## Hold the job open
 
-### `minutes`
-- **Omitted (non-blocking):** the node serves in the background, the workflow advances to your next
-  steps, and the node stays reachable until the job ends.
-- **`minutes: N`:** hold the job open for N minutes so you can ssh in, do your thing, then it stops.
+Without `minutes` the action returns once the node is up: the node keeps serving in the background and the
+workflow moves on to your next steps. With `minutes`, the step stays alive until the hold runs out or the
+node is stopped early. From your laptop:
 
-End a held session early from your laptop with `swoosh stop me/<label>`, which reaches the runner's gated
-control service and tears it down. The release binary takes the peer positionally; a build from `main`, newer
-than v0.8.0, spells it `swoosh stop --at me/<label>`.
+```sh
+swoosh stop me/ci-runner          # the v0.8.0 client
+swoosh stop --at me/ci-runner     # a client built from main, newer than v0.8.0
+```
 
-## Debug a runner (or a failed job)
+Either form reaches the node's gated control service and tears it down; the action logs `released early.`
+and the step passes. The action checks the serve process is alive before it reports the node reachable,
+and keeps checking during the hold, so a node that died fails the step with the redacted error instead of
+a blind sleep.
 
-`examples/debug-ssh.yml` is a caller workflow for both: trigger it by hand (`gh workflow run debug-ssh.yml`)
-and `swoosh ssh me/ci-runner` into a live runner, or attach the action to a real job with `if: failure()` to
-shell into a FAILED runner and poke around. Its `timeout-minutes` is a hard cap; the action's own hold is
-`minutes`.
+## Reach it
 
-## Rotate
-The runner's identity is disposable: `swoosh mint` a fresh authkey per use or per repo. Because the
-authkey carries only a *derived* device seed (not your signet), a leaked one compromises that one runner,
-never your root key, and you can revoke it.
+```sh
+swoosh ssh me/ci-runner      # a keyless shell in the runner
+swoosh ping me/ci-runner     # round-trip time
+swoosh speed me/ci-runner    # throughput
+```
 
-## How it stays safe
-- **Gated by membership.** Every service is served behind the family gate: only devices and delegates of
-  the signet the runner adopted may reach it. The keyless shell (`sshd:`) has no auth of its own, so
-  swoosh refuses to serve it with `--public` at all.
-- **Log-safety by design.** The runner serves with `--quiet`, so the NodeId is never printed; it can't
-  leak into a public log via a stray `cat`, not just a redirect.
-- **Liveness check.** The hold verifies a served service is alive and fails fast if it died, instead of a
-  blind `sleep`.
-- **Checksum + provenance install.** The `swoosh` binary is downloaded from its GitHub Releases, checked
-  against the published `.sha256`, and its build-provenance attestation verified, never a bare `curl | sudo`.
+The action reports the node reachable once the serve process is up. Over iroh a session often starts
+relayed and hole-punches to a direct path, so a `swoosh ping` run can read `(upgraded from relayed)`
+mid-run, and `swoosh status me/ci-runner` names the path you are on. Check reachability before a later
+step depends on the node.
+
+## Rotate the authkey
+
+Mint a fresh authkey per use or per repo, then update the secret:
+
+```sh
+swoosh mint ci-runner
+gh secret set THEIA_AUTHKEY
+```
+
+The authkey carries the device's derived seed and trust for your signet, never your signet key, so a
+leaked authkey compromises that one runner and not your identity. It stays adoptable until the membership
+badge it carries expires, so mint right before you deploy. The v0.8.0 client mints a one-year badge; a
+client built from `main`, newer than v0.8.0, takes `--expires` and defaults to 90 days
+(`swoosh mint ci-runner --expires 30d`).
+
+## Choose the swoosh version
+
+```yaml
+- uses: theia-hq/swoosh-action@v2
+  with:
+    authkey: ${{ secrets.THEIA_AUTHKEY }}
+    version: v0.8.0
+```
+
+`latest` installs the newest release, so what runs changes over time; a release tag keeps runs
+reproducible. Whichever you choose, the install checks the published `.sha256` and verifies the
+build-provenance attestation with `gh attestation verify` before the binary runs, so a swapped release
+asset is refused.
+
+## The full node key never reaches the log
+
+The action serves with `--quiet`, so the readiness banner (the full node key, the service list, the gate)
+never prints. On a failure it rewrites every `bf01...` in the node's stderr to `bf01<redacted>` before
+echoing it. `adopt` prints a short label for the device, not the address, and the name you dial was minted
+on your laptop before the job started, so there is nothing in the log to read back to reach the node.
+
+## Self-hosted runners
+
+On a runner that persists between jobs, the swoosh binary stays installed in `/usr/local/bin`, and the
+next job's `adopt` replaces the previous identity with the authkey that run provides. Set `minutes` so
+each hold ends itself; without it the node keeps serving after the step returns, and the action does not
+stop a node left by an earlier job.
+
+## Debug a runner
+
+Trigger the Quickstart workflow by hand to `swoosh ssh me/ci-runner` into a live runner
+(`gh workflow run <file>`). To shell into a failed runner instead, add the action step to a real job with
+`if: failure()`:
+
+```yaml
+- if: failure()
+  uses: theia-hq/swoosh-action@v2
+  with:
+    authkey: ${{ secrets.THEIA_AUTHKEY }}
+    minutes: 20
+```
+
+A job's `timeout-minutes` is a hard cap; the action's own hold is `minutes`.
+
+## Troubleshooting
+
+### `error: unexpected argument '--at' found`
+
+The `swoosh stop` spelling follows your laptop client, not the action. The v0.8.0 client takes the peer
+positionally:
+
+```text
+$ swoosh stop --at me/ci-runner
+error: unexpected argument '--at' found
+```
+
+Run `swoosh stop me/ci-runner` instead. A client built from `main`, newer than v0.8.0, is the other way
+around and refuses the bare peer:
+
+```text
+$ swoosh stop me/ci-runner
+error: unexpected argument 'me/ci-runner' found
+```
+
+`swoosh stop --help` shows the form your client takes.
+
+### `Error: could not stop ...: stream`
+
+The stop can land while the v0.8.0 client reports the failed stream open: the node was already tearing
+down. The action log shows `released early.` and the step passes, and `swoosh status me/ci-runner` then
+reports `unreachable`, so the node is gone despite the client's error.
+
+### Error: not an authkey (expected the authkey: prefix)
+
+```text
+Error: not an authkey (expected the `authkey:` prefix)
+```
+
+The `swoosh adopt` step failed because the secret does not hold the value `swoosh mint` printed. The
+usual cause is a missing or renamed secret: `${{ secrets.THEIA_AUTHKEY }}` evaluates to empty, and
+`adopt` rejects the empty value. A truncated paste, a `sheer:` link, or a path fails the same way. Set the
+repository secret to the whole minted value, under the name the workflow references:
+
+```sh
+gh secret set THEIA_AUTHKEY
+```
+
+The other parse failures (`malformed authkey ...`, `invalid base32 in authkey seed`, `authkey seed is not
+32 bytes`, `invalid signet in authkey`) have the same fix. Secrets are not passed to workflows triggered
+by pull requests from forks, so the action cannot run there.
+
+### The hold ended early
+
+`released early.` with a passing step means the node was stopped, from your laptop or at the deadline:
+that is the intended release. If the step instead fails with `::error::the node exited before the hold
+ended.` or `::error::swoosh serve exited immediately.`, the node exited nonzero and the redacted stderr
+below the error names why (`bf01...` is scrubbed to `bf01<redacted>`).
