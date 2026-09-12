@@ -106,9 +106,8 @@ def check_node(node, snippet, inputs, refs, findings)
   end
 end
 
-# Fallback for blocks that are not YAML documents: README's `services:` snippet is a single input
-# VALUE (`name=addr` pairs carry `: `), so Psych refuses it. It still gets its `with:`/`uses:`
-# lines checked, by indentation, so a bad key in any such block cannot hide.
+# Fallback for blocks that are not YAML documents (an unquoted `: ` inside a value makes Psych refuse
+# the block): it still gets its `with:`/`uses:` lines checked, by indentation, so a bad key cannot hide.
 def check_lines(snippet, inputs, refs, findings)
   with_indent = nil
   snippet.text.each_line.with_index(1) do |line, number|
