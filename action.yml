@@ -26,9 +26,10 @@ inputs:
   minutes:
     description: >
       hold the job open this many minutes so the node stays reachable for external or interactive use (ssh
-      in, do your thing, then it stops). OMIT to run non-blocking: the node serves in the background and the
-      workflow ADVANCES to your next steps, staying reachable until the job ends (the tailscale shape). End a
-      hold early with `swoosh stop --at me/<label>` from your laptop.
+      in, do your thing, then it stops). The node also stops itself when the deadline passes, or on a remote
+      `swoosh stop`, whichever comes first. OMIT to run non-blocking: the step ends, the node stays
+      reachable until the job ends, and the workflow ADVANCES to your next steps. End a hold early with
+      `swoosh stop --at me/<label>` from your laptop.
     required: false
     default: ""
   version:
@@ -76,26 +77,42 @@ runs:
         MINUTES: ${{ inputs.minutes }}
       run: |
         set -euo pipefail
-        # Adopt the authkey off argv: `swoosh adopt -` reads stdin, so the secret never appears in `ps` or
-        # `/proc/<pid>/cmdline`. (`adopt` also accepts `@<path>` for a file; `SWOOSH_AUTHKEY` is the same
-        # value, taken verbatim, for callers who prefer the environment.)
-        # FLAG(Adversary): the stdin pipe closes the argv leak but the secret still rides the `SWOOSH_AUTHKEY`
-        # env var into this step (visible in /proc/<pid>/environ to co-tenants, inherited by spawned
-        # children). Matches what `swoosh adopt` documents for the env form; a file (`@<path>`) input is
-        # the further close if wanted.
-        printf '%s' "$SWOOSH_AUTHKEY" | swoosh adopt -
+        # Adopt the authkey without exposing it in argv: write it to a fresh owner-only file in the runner
+        # temp (umask 077 makes it 0600, the mode `@<path>` requires), unset the env var so nothing spawned
+        # after it inherits the seed, adopt from `@<path>`, then remove the file at once. The EXIT trap
+        # removes it on a failure path too.
+        #
+        # Closed: argv (`ps`, `/proc/<pid>/cmdline` see only the path) and child inheritance (the var is
+        # unset before any program is spawned). Remaining: the runner still delivers this input as an env var
+        # to the step (this process's environment, single-tenant), and the file exists briefly on disk, 0600.
+        key="$RUNNER_TEMP/swoosh-authkey"
+        trap 'rm -f "$key"' EXIT
+        (umask 077 && rm -f "$key" && printf '%s' "$SWOOSH_AUTHKEY" > "$key")
+        unset SWOOSH_AUTHKEY
+        swoosh adopt "@$key"
+        rm -f "$key"
         # Serve the requested services behind the DEFAULT family gate (rooted at the adopted signet): only
         # your devices and delegates can reach any of them, no per-key allowlist, and no --public (serve
         # refuses --public for sshd:, a keyless shell has no legitimate public use). --quiet: the readiness
         # banner (node id, services, gate) is NEVER printed, so it cannot leak into the (public) log. Serves
         # over iroh, reachable by key across the NAT.
         read -ra SERVICES <<< "$THEIA_SERVICES"
-        swoosh serve "${SERVICES[@]}" --quiet 2> "$RUNNER_TEMP/expose.err" &
+        # `0` is no hold: `Lifetime` refuses a zero span (`0m`), and the non-blocking default is what OMIT
+        # already means. Normalize it away once, so `-n "$MINUTES"` alone arms both the node's own
+        # `--expires` deadline and the hold loop below.
+        case "$MINUTES" in "" | 0) MINUTES="" ;; esac
+        SERVE_ARGS=("${SERVICES[@]}" --quiet)
+        if [ -n "$MINUTES" ]; then
+          # The node carries its own local deadline, so a persistent self-hosted runner cannot leave a live
+          # node behind if the step is killed before the hold below ends it.
+          SERVE_ARGS+=(--expires "${MINUTES}m")
+        fi
+        swoosh serve "${SERVE_ARGS[@]}" 2> "$RUNNER_TEMP/expose.err" &
         pid=$!
         # Fail fast: give serve a moment, then verify it is alive, so a dead node (bad authkey, gate, port)
         # surfaces HERE with the key redacted, not silently later. Without `minutes` the step ends here and
-        # the backgrounded serve persists for the rest of the job (the non-blocking, tailscale-shaped
-        # default); with one, the hold below keeps this step alive until release.
+        # the backgrounded serve persists for the rest of the job (the non-blocking default); with one, the
+        # hold below keeps this step alive until release.
         sleep 2
         if ! kill -0 "$pid" 2>/dev/null; then
           # Died before the check: classify by exit code the same way the hold below does, so an instant
