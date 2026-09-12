@@ -77,20 +77,14 @@ runs:
         MINUTES: ${{ inputs.minutes }}
       run: |
         set -euo pipefail
-        # Adopt the authkey without exposing it in argv: write it to a fresh owner-only file in the runner
-        # temp (umask 077 makes it 0600, the mode `@<path>` requires), unset the env var so nothing spawned
-        # after it inherits the seed, adopt from `@<path>`, then remove the file at once. The EXIT trap
-        # removes it on a failure path too.
-        #
-        # Closed: argv (`ps`, `/proc/<pid>/cmdline` see only the path) and child inheritance (the var is
-        # unset before any program is spawned). Remaining: the runner still delivers this input as an env var
-        # to the step (this process's environment, single-tenant), and the file exists briefly on disk, 0600.
-        key="$RUNNER_TEMP/swoosh-authkey"
-        trap 'rm -f "$key"' EXIT
-        (umask 077 && rm -f "$key" && printf '%s' "$SWOOSH_AUTHKEY" > "$key")
+        # Adopt the authkey over stdin: the pipe is a shell builtin write (`printf`), so the seed never
+        # enters argv (`ps` sees only `adopt -`) and never touches disk. The runner delivers inputs to the
+        # step as env (unavoidable), and the window is the step's own process, same-uid only on a
+        # single-tenant runner; `adopt` is the one child that holds it, and only long enough to consume it.
+        # Unset it the moment adopt returns, before any other process spawns (notably `swoosh serve`), so
+        # children never inherit it.
+        printf '%s' "$SWOOSH_AUTHKEY" | swoosh adopt -
         unset SWOOSH_AUTHKEY
-        swoosh adopt "@$key"
-        rm -f "$key"
         # Serve the requested services behind the DEFAULT family gate (rooted at the adopted signet): only
         # your devices and delegates can reach any of them, no per-key allowlist, and no --public (serve
         # refuses --public for sshd:, a keyless shell has no legitimate public use). --quiet: the readiness
