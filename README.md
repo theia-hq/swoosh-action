@@ -76,7 +76,7 @@ Space-separated `name=addr` pairs. The default serves a full node: a keyless she
 refused. Name your own set to add or drop services:
 
 ```yaml
-services: ssh=sshd: news=fetch:https://news.example web=127.0.0.1:8080
+services: "ssh=sshd: news=fetch:https://news.example web=127.0.0.1:8080"
 ```
 
 - `news=fetch:<origin>` (HTTP egress you can `swoosh fetch --via me/<label> <url>` through, fetched by the runner, streamed back).
@@ -118,6 +118,3 @@ never your root key, and you can revoke it.
   blind `sleep`.
 - **Checksum + provenance install.** The `swoosh` binary is downloaded from its GitHub Releases, checked
   against the published `.sha256`, and its build-provenance attestation verified, never a bare `curl | sudo`.
-
-## Still to do
-- **Cold Newcomer pass.** A stranger drops it in and gets a shell, with no prior context.
