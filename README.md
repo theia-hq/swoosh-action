@@ -24,6 +24,9 @@ redacts node ids, and only a member of your signet can reach any service. (Unlik
 nothing is read back from a log.)
 
 ## One-time setup (on your laptop)
+**Prerequisite:** the [`swoosh`](https://github.com/theia-hq/swoosh) client on your laptop (grab a binary
+from its [releases](https://github.com/theia-hq/swoosh/releases)).
+
 ```sh
 swoosh mint ci-runner        # → prints an authkey, and records the contact me/ci-runner
 ```
@@ -36,9 +39,18 @@ In the repo settings:
 
 ## Use it
 ```yaml
-- uses: theia-hq/swoosh-action@v2
-  with:
-    authkey: ${{ secrets.THEIA_AUTHKEY }}
+name: swoosh
+on:
+  workflow_dispatch: {}
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: theia-hq/swoosh-action@v2
+        with:
+          authkey: ${{ secrets.THEIA_AUTHKEY }}
+          # hold the job open so you can reach it; omit to run non-blocking
+          minutes: 30
 ```
 Trigger the workflow, then from your laptop reach whatever it serves:
 ```sh
