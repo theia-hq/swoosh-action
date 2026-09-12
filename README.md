@@ -1,12 +1,8 @@
 # swoosh-action
 
 A GitHub Action that turns a CI runner into a node you reach by its public key: across GitHub's NAT, with
-no port-forward and no SSH keys to manage.
-
-Mint the runner's name on your laptop before the runner exists, then dial `me/ci-runner` while the job
-runs. The node serves the services you choose behind a gate that admits only your own devices and the
-delegates you grant. The shell it serves is keyless: an SSH server opened by membership, not by an SSH
-key.
+no port-forward and no SSH keys to manage. Mint the runner's name on your laptop before the runner exists,
+then dial `me/ci-runner` while the job runs.
 
 ## Quickstart
 
@@ -27,6 +23,9 @@ jobs:
           minutes: 30
 ```
 
+Save it as `.github/workflows/swoosh.yml`, push it to your default branch, then run it from the Actions
+tab or with `gh workflow run swoosh.yml`.
+
 `authkey` is required. The runner adopts it to become the device identity
 [`swoosh mint`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/mint.md) derived and
 to trust the root key that minted it (your signet), so its gate admits your devices and the delegates you
@@ -44,12 +43,16 @@ grant. The authkey carries a device seed: keep it in a repository secret, never 
 
 ## Prerequisites
 
-1. A laptop with the [`swoosh`](https://github.com/theia-hq/swoosh) client installed and your signet on
-   it. Get a binary from the [releases](https://github.com/theia-hq/swoosh/releases) page.
+1. A laptop with the [`swoosh`](https://github.com/theia-hq/swoosh) client installed. Get a binary from
+   the [releases](https://github.com/theia-hq/swoosh/releases) page. The client mints your signet (your
+   root key) on first use, and
+   [`swoosh identity`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/identity.md)
+   prints its key.
 2. The authkey: run `swoosh mint ci-runner` on that laptop. It prints the authkey and records the contact
    `me/ci-runner`, the name you dial later.
-3. A GitHub repository you can set secrets on. Run `gh secret set THEIA_AUTHKEY`, paste the authkey, and
-   pass it as `${{ secrets.THEIA_AUTHKEY }}` in the workflow.
+3. A GitHub repository you can set secrets on. With the [`gh` CLI](https://cli.github.com) installed, run
+   `gh secret set THEIA_AUTHKEY` and paste the authkey; or add it in the repository under Settings >
+   Secrets and variables > Actions. The workflow reads it as `${{ secrets.THEIA_AUTHKEY }}`.
 4. A Linux or macOS runner. GitHub-hosted runners need no setup. A self-hosted runner needs the `gh` CLI
    on `PATH`, because the install step verifies the binary's provenance with `gh attestation verify`.
 
@@ -99,8 +102,8 @@ swoosh speed me/ci-runner    # throughput
 
 The action reports the node reachable once the serve process is up. Over iroh a session often starts
 relayed and hole-punches to a direct path, so a `swoosh ping` run can read `(upgraded from relayed)`
-mid-run, and `swoosh status me/ci-runner` names the path you are on. Check reachability before a later
-step depends on the node.
+mid-run, and `swoosh status me/ci-runner` names the path you are on. From your laptop, run
+`swoosh ping me/ci-runner` to confirm reachability before a later step depends on the node.
 
 ## Rotate the authkey
 
@@ -113,8 +116,8 @@ gh secret set THEIA_AUTHKEY
 
 The authkey carries the device's derived seed and trust for your signet, never your signet key, so a
 leaked authkey compromises that one runner and not your identity. It stays adoptable until the membership
-badge it carries expires, so mint right before you deploy. The v0.8.0 client mints a one-year badge; a
-client built from `main`, newer than v0.8.0, takes `--expires` and defaults to 90 days
+badge it carries expires, so mint right before you deploy. The v0.8.0 client mints a one-year badge and
+has no `--expires`; a client built from `main`, newer than v0.8.0, takes it and defaults to 90 days
 (`swoosh mint ci-runner --expires 30d`).
 
 ## Choose the swoosh version
@@ -148,8 +151,8 @@ stop a node left by an earlier job.
 ## Debug a runner
 
 Trigger the Quickstart workflow by hand to `swoosh ssh me/ci-runner` into a live runner
-(`gh workflow run <file>`). To shell into a failed runner instead, add the action step to a real job with
-`if: failure()`:
+(`gh workflow run swoosh.yml`). To shell into a failed runner instead, add the action step to a real job
+with `if: failure()`:
 
 ```yaml
 - if: failure()
@@ -183,13 +186,17 @@ error: unexpected argument 'me/ci-runner' found
 
 `swoosh stop --help` shows the form your client takes.
 
-### `Error: could not stop ...: stream`
+### Error: could not stop
+
+```text
+Error: could not stop bf01ueeh4voppqeaupfwi5s3v7mosvvoqjvhclnan7qnf5wbfy6gyutq: stream
+```
 
 The stop can land while the v0.8.0 client reports the failed stream open: the node was already tearing
 down. The action log shows `released early.` and the step passes, and `swoosh status me/ci-runner` then
 reports `unreachable`, so the node is gone despite the client's error.
 
-### Error: not an authkey (expected the authkey: prefix)
+### Error: not an authkey
 
 ```text
 Error: not an authkey (expected the `authkey:` prefix)
@@ -197,8 +204,8 @@ Error: not an authkey (expected the `authkey:` prefix)
 
 The `swoosh adopt` step failed because the secret does not hold the value `swoosh mint` printed. The
 usual cause is a missing or renamed secret: `${{ secrets.THEIA_AUTHKEY }}` evaluates to empty, and
-`adopt` rejects the empty value. A truncated paste, a `sheer:` link, or a path fails the same way. Set the
-repository secret to the whole minted value, under the name the workflow references:
+`adopt` rejects the empty value. A truncated paste, a capability link (`sheer:...`), or a path fails the
+same way. Set the repository secret to the whole minted value, under the name the workflow references:
 
 ```sh
 gh secret set THEIA_AUTHKEY
