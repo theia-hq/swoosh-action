@@ -80,8 +80,9 @@ adopted can reach any of them. (See `swoosh serve` for the full addr grammar.)
   steps, and the node stays reachable until the job ends.
 - **`minutes: N`:** hold the job open for N minutes so you can ssh in, do your thing, then it stops.
 
-End a held session early from your laptop with `swoosh stop --at me/<label>`, which reaches the runner's gated
-control service and tears it down.
+End a held session early from your laptop with `swoosh stop me/<label>`, which reaches the runner's gated
+control service and tears it down. The release binary takes the peer positionally; a build from `main`, newer
+than v0.8.0, spells it `swoosh stop --at me/<label>`.
 
 ## Rotate
 The runner's identity is disposable: `swoosh mint` a fresh authkey per use or per repo. Because the
