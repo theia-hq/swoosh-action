@@ -96,6 +96,13 @@ End a held session early from your laptop with `swoosh stop me/<label>`, which r
 control service and tears it down. The release binary takes the peer positionally; a build from `main`, newer
 than v0.8.0, spells it `swoosh stop --at me/<label>`.
 
+## Debug a runner (or a failed job)
+
+`examples/debug-ssh.yml` is a caller workflow for both: trigger it by hand (`gh workflow run debug-ssh.yml`)
+and `swoosh ssh me/ci-runner` into a live runner, or attach the action to a real job with `if: failure()` to
+shell into a FAILED runner and poke around. Its `timeout-minutes` is a hard cap; the action's own hold is
+`minutes`.
+
 ## Rotate
 The runner's identity is disposable: `swoosh mint` a fresh authkey per use or per repo. Because the
 authkey carries only a *derived* device seed (not your signet), a leaked one compromises that one runner,
