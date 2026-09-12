@@ -1,0 +1,24 @@
+name: validate-examples
+# Fail on caller-facing drift: a `with:` key in README's yaml blocks or examples/*.yml that
+# action.yml does not declare, or a `uses: theia-hq/swoosh-action@<ref>` whose ref is gone.
+on:
+  push:
+    paths:
+      - 'examples/**'
+      - README.md
+      - action.yml
+      - scripts/validate-examples.rb
+      - .github/workflows/validate-examples.yml
+  pull_request:
+    paths:
+      - 'examples/**'
+      - README.md
+      - action.yml
+      - scripts/validate-examples.rb
+      - .github/workflows/validate-examples.yml
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ruby scripts/validate-examples.rb
