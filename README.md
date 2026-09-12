@@ -68,13 +68,21 @@ set to add the services you need:
     services: "ssh=sshd: fetch=fetch:https://news.example web=127.0.0.1:8080 sock=unix:/path"
 ```
 
-Every service sits behind the same gate, and the keyless shell has no public form: `swoosh serve` refuses
-`--public` for `sshd:`. The set you can serve depends on the swoosh release the action installs
+The set you can serve depends on the swoosh release the action installs
 ([Choose the swoosh version](#choose-the-swoosh-version) pins it). The
 [services catalog](https://github.com/theia-hq/swoosh/blob/main/docs/reference/services.md) lists every
 target and how it is gated, and
 [`swoosh serve`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/serve.md) has the
 full `name=target` grammar.
+
+## This action exposes no public service
+
+This action exposes no public service today. Every service sits behind your gate: only your own devices
+and the delegates you grant can reach any of them. `--public` is a `swoosh serve` feature, not an input
+of this action, and nothing here turns it on. The keyless shell refuses it because a public shell is
+remote code execution for strangers: `swoosh serve` rejects `--public` for `sshd:` by name. The
+[public service page](https://github.com/theia-hq/swoosh/blob/main/docs/use-cases/public-service.md)
+covers `--public` on a node you run yourself.
 
 ## Hold the job open
 
@@ -83,14 +91,13 @@ workflow moves on to your next steps. With `minutes`, the step stays alive until
 node is stopped early. From your laptop:
 
 ```sh
-swoosh stop me/ci-runner          # the v0.8.0 client
-swoosh stop --at me/ci-runner     # a client built from main, newer than v0.8.0
+swoosh stop --at me/ci-runner
 ```
 
-Either form reaches the node's gated control service and tears it down; the action logs `released early.`
-and the step passes. The action checks the serve process is alive before it reports the node reachable,
-and keeps checking during the hold, so a node that died fails the step with the redacted error instead of
-a blind sleep.
+The stop reaches the node's gated control service and tears it down; the action logs `released early.` and
+the step passes. The action checks the serve process is alive before it reports the node reachable, and
+keeps checking during the hold, so a node that died fails the step with the redacted error instead of a
+blind sleep.
 
 ## Reach it
 
@@ -105,6 +112,9 @@ relayed and hole-punches to a direct path, so a `swoosh ping` run can read `(upg
 mid-run, and `swoosh status me/ci-runner` names the path you are on. From your laptop, run
 `swoosh ping me/ci-runner` to confirm reachability before a later step depends on the node.
 
+For the end-to-end deployment, the [`theia-hq/qat`](https://github.com/theia-hq/qat) template runs this
+action on demand to give a developer a keyless shell on a runner.
+
 ## Rotate the authkey
 
 Mint a fresh authkey per use or per repo, then update the secret:
@@ -116,9 +126,8 @@ gh secret set THEIA_AUTHKEY
 
 The authkey carries the device's derived seed and trust for your signet, never your signet key, so a
 leaked authkey compromises that one runner and not your identity. It stays adoptable until the membership
-badge it carries expires, so mint right before you deploy. The v0.8.0 client mints a one-year badge and
-has no `--expires`; a client built from `main`, newer than v0.8.0, takes it and defaults to 90 days
-(`swoosh mint ci-runner --expires 30d`).
+badge it carries expires, so mint right before you deploy. `swoosh mint ci-runner --expires 30d` shortens
+the window; the default is 90 days.
 
 ## Choose the swoosh version
 
@@ -134,12 +143,18 @@ reproducible. Whichever you choose, the install checks the published `.sha256` a
 build-provenance attestation with `gh attestation verify` before the binary runs, so a swapped release
 asset is refused.
 
-## The full node key never reaches the log
+## The node id is a public key, and the log is public
 
-The action serves with `--quiet`, so the readiness banner (the full node key, the service list, the gate)
-never prints. On a failure it rewrites every `bf01...` in the node's stderr to `bf01<redacted>` before
-echoing it. `adopt` prints a short label for the device, not the address, and the name you dial was minted
-on your laptop before the job started, so there is nothing in the log to read back to reach the node.
+The node id is a public key, not a secret: knowing it grants nothing without a badge from your signet, and
+every service stays behind the gate. The action still serves with `--quiet`, because a CI log is a public
+record: the readiness banner (the full node key, the service list, the gate) never prints, and an
+accidental `cat` cannot republish the node's address. On a failure the action rewrites every `bf01...` in
+the node's stderr to `bf01<redacted>` before echoing it.
+
+`adopt` prints the derived device's short label (like `bf01ueeh4voppqea`), never the full node key. The
+full key is the address a stranger would dial, and it stays on the two machines that need it: the node's
+home and your contacts. Your own terminal or a private log is a fine place to show it; a public CI log is
+not. Unlike tmate's printed connection string, nothing has to be read back from the log to reach the node.
 
 ## Self-hosted runners
 
@@ -165,36 +180,6 @@ with `if: failure()`:
 A job's `timeout-minutes` is a hard cap; the action's own hold is `minutes`.
 
 ## Troubleshooting
-
-### `error: unexpected argument '--at' found`
-
-The `swoosh stop` spelling follows your laptop client, not the action. The v0.8.0 client takes the peer
-positionally:
-
-```text
-$ swoosh stop --at me/ci-runner
-error: unexpected argument '--at' found
-```
-
-Run `swoosh stop me/ci-runner` instead. A client built from `main`, newer than v0.8.0, is the other way
-around and refuses the bare peer:
-
-```text
-$ swoosh stop me/ci-runner
-error: unexpected argument 'me/ci-runner' found
-```
-
-`swoosh stop --help` shows the form your client takes.
-
-### Error: could not stop
-
-```text
-Error: could not stop bf01ueeh4voppqeaupfwi5s3v7mosvvoqjvhclnan7qnf5wbfy6gyutq: stream
-```
-
-The stop can land while the v0.8.0 client reports the failed stream open: the node was already tearing
-down. The action log shows `released early.` and the step passes, and `swoosh status me/ci-runner` then
-reports `unreachable`, so the node is gone despite the client's error.
 
 ### Error: not an authkey
 

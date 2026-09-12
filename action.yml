@@ -28,14 +28,13 @@ inputs:
       hold the job open this many minutes so the node stays reachable for external or interactive use (ssh
       in, do your thing, then it stops). OMIT to run non-blocking: the node serves in the background and the
       workflow ADVANCES to your next steps, staying reachable until the job ends (the tailscale shape). End a
-      hold early with `swoosh stop me/<label>` from your laptop (a build from `main`, newer than v0.8.0,
-      spells it `swoosh stop --at me/<label>`).
+      hold early with `swoosh stop --at me/<label>` from your laptop.
     required: false
     default: ""
   version:
     # FLAG(CLI-Architect): input name `version`, values `latest` or a release tag, default `latest`.
     description: >
-      the swoosh release to install: `latest` (the newest release) or a pinned release tag (e.g. `v2`).
+      the swoosh release to install: `latest` (the newest release) or a pinned release tag (e.g. `v0.8.0`).
       Pin for reproducible runs; `latest` for always-current.
     required: false
     default: "latest"
@@ -121,7 +120,7 @@ runs:
         # `swoosh stop` exits 0 by design (a clean early release, not a crash); a genuine failure exits
         # nonzero and the error branch prints the redacted stderr.
         deadline=$(( SECONDS + MINUTES * 60 ))
-        echo "holding open for ${MINUTES}m. early release: swoosh stop me/<label> from your laptop."
+        echo "holding open for ${MINUTES}m. early release: swoosh stop --at me/<label> from your laptop."
         while [ "$SECONDS" -lt "$deadline" ]; do
           if ! kill -0 "$pid" 2>/dev/null; then
             break
