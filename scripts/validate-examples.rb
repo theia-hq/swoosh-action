@@ -4,11 +4,13 @@
 # Check the caller-facing examples against the Action they call.
 #
 # Two drifts this catches:
-#   1. a `with:` key in a README yaml block or an examples/*.yml file that action.yml does not declare;
+#   1. a `with:` key in a README yaml block (or an examples/*.yml file, if one is ever added) that
+#      action.yml does not declare;
 #   2. a `uses: theia-hq/swoosh-action@<ref>` naming a tag or branch that does not exist upstream.
 #
 # Source of truth for inputs: the `inputs:` keys in action.yml.
-# Snippets checked: examples/*.yml and every ```yaml fenced block in README.md.
+# Snippets checked: every ```yaml fenced block in README.md, plus examples/*.yml when present
+# (unexercised example files do not ship; the scan stays for their absence).
 # The ref check needs the network (`git ls-remote` against the public action repo).
 #
 # Run: ruby scripts/validate-examples.rb
