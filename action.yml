@@ -28,7 +28,8 @@ inputs:
       hold the job open this many minutes so the node stays reachable for external or interactive use (ssh
       in, do your thing, then it stops). OMIT to run non-blocking: the node serves in the background and the
       workflow ADVANCES to your next steps, staying reachable until the job ends (the tailscale shape). End a
-      hold early with `swoosh stop --at me/<label>` from your laptop.
+      hold early with `swoosh stop me/<label>` from your laptop (a build from `main`, newer than v0.8.0,
+      spells it `swoosh stop --at me/<label>`).
     required: false
     default: ""
   version:
@@ -68,11 +69,12 @@ runs:
         gh attestation verify "$RUNNER_TEMP/swoosh" --repo theia-hq/swoosh
         sudo install -m 0755 "$RUNNER_TEMP/swoosh" /usr/local/bin/swoosh
 
-    - name: adopt your signet and serve the services (family-gated)
+    - name: adopt your signet, serve the services, hold if asked (family-gated)
       shell: bash
       env:
         SWOOSH_AUTHKEY: ${{ inputs.authkey }}
         THEIA_SERVICES: ${{ inputs.services }}
+        MINUTES: ${{ inputs.minutes }}
       run: |
         set -euo pipefail
         # Adopt the authkey off argv: `swoosh adopt -` reads stdin, so the secret never appears in `ps` or
@@ -90,43 +92,50 @@ runs:
         # over iroh, reachable by key across the NAT.
         read -ra SERVICES <<< "$THEIA_SERVICES"
         swoosh serve "${SERVICES[@]}" --quiet 2> "$RUNNER_TEMP/expose.err" &
-        echo $! > "$RUNNER_TEMP/expose.pid"
+        pid=$!
         # Fail fast: give serve a moment, then verify it is alive, so a dead node (bad authkey, gate, port)
-        # surfaces HERE with the key redacted, not silently in a later step. The serve is backgrounded, so it
-        # persists past this step; a `minutes` hold below monitors it, and without one the job's own next
-        # steps run against a reachable node until the job ends (the non-blocking, tailscale-shaped default).
+        # surfaces HERE with the key redacted, not silently later. Without `minutes` the step ends here and
+        # the backgrounded serve persists for the rest of the job (the non-blocking, tailscale-shaped
+        # default); with one, the hold below keeps this step alive until release.
         sleep 2
-        if ! kill -0 "$(cat "$RUNNER_TEMP/expose.pid")" 2>/dev/null; then
-          echo "::error::swoosh serve exited immediately." >&2
-          sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/expose.err" >&2 || true
-          exit 1
+        if ! kill -0 "$pid" 2>/dev/null; then
+          # Died before the check: classify by exit code the same way the hold below does, so an instant
+          # graceful release (a remote stop landing within the window exits 0) is not read as a startup
+          # crash; a nonzero exit still surfaces loud with the redacted log.
+          code=0
+          wait "$pid" 2>/dev/null || code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "::error::swoosh serve exited immediately." >&2
+            sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/expose.err" >&2 || true
+            exit "$code"
+          fi
+          echo "released early."
+          exit 0
         fi
         echo "node reachable over the overlay by key. from your laptop: swoosh ssh me/<label> (or ping/speed/fetch)."
-
-    # Only when `minutes` is set: hold the job open so the node stays reachable for external or interactive
-    # use. Omitted, the action is non-blocking (the tailscale shape): the workflow advances to your next
-    # steps and the node stays up until the job ends.
-    - name: hold the job open for interactive use
-      if: ${{ inputs.minutes != '' }}
-      shell: bash
-      env:
-        MINUTES: ${{ inputs.minutes }}
-      run: |
-        set -uo pipefail
-        pid=$(cat "$RUNNER_TEMP/expose.pid")
+        if [ -z "$MINUTES" ]; then
+          exit 0
+        fi
+        # Only when `minutes` is set: hold the job open. The serve above is THIS shell's child, so `wait`
+        # below reaps its real exit code; a pid left behind by an earlier step cannot be waited on. A remote
+        # `swoosh stop` exits 0 by design (a clean early release, not a crash); a genuine failure exits
+        # nonzero and the error branch prints the redacted stderr.
         deadline=$(( SECONDS + MINUTES * 60 ))
-        echo "holding open for ${MINUTES}m. early release: swoosh stop --at me/<label> from your laptop."
+        echo "holding open for ${MINUTES}m. early release: swoosh stop me/<label> from your laptop."
         while [ "$SECONDS" -lt "$deadline" ]; do
           if ! kill -0 "$pid" 2>/dev/null; then
             break
           fi
           sleep 5
         done
-        # Deadline expiry with a live pid: stop the node locally first, then reap. Early remote stop
-        # already killed the pid, so this kill is a no-op via || true and wait returns its code.
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null
-        code=$?
+        # Deadline expiry with the node still alive: SIGINT, the interrupt serve maps to exit 0 (the same
+        # graceful stop Ctrl-C and `swoosh stop` take). SIGTERM has no handler and would reap as 143, which
+        # would read as a crash. An early remote stop already ended the process: the kill is a no-op then.
+        if kill -0 "$pid" 2>/dev/null; then
+          kill -INT "$pid" 2>/dev/null || true
+        fi
+        code=0
+        wait "$pid" 2>/dev/null || code=$?
         if [ "$code" -ne 0 ]; then
           echo "::error::the node exited before the hold ended." >&2
           sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/expose.err" >&2 || true
