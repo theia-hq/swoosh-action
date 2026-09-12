@@ -53,9 +53,9 @@ ssh key.
 
 | input | required | default | what it is |
 | ----- | -------- | ------- | ---------- |
-| `authkey` | yes | — | the authkey `swoosh mint` printed. The runner adopts it to become that device and trust your signet. A secret. |
+| `authkey` | yes | none | the authkey `swoosh mint` printed. The runner adopts it to become that device and trust your signet. A secret. |
 | `services` | no | `ssh=sshd: ping=ping: speed=speed:` | the services to serve (below). |
-| `minutes` | no | — | hold the job open this many minutes for interactive use. Omit to run non-blocking (below). |
+| `minutes` | no | none | hold the job open this many minutes for interactive use. Omit to run non-blocking (below). |
 | `version` | no | `latest` | the swoosh release to install: `latest` or a pinned tag (e.g. `v2`). |
 
 ### `services`
