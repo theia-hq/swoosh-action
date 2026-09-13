@@ -1,18 +1,23 @@
-# The flagship Action: expose a GitHub runner's shell over the theia overlay, with no SSH keys to manage.
-# `uses: theia-hq/swoosh-action@v2` in any workflow, then `swoosh ssh me/<label>` into the runner.
-# The shell is a keyless SSH server (the sshh crate): it has no ssh keys of its own. What authorizes a
-# session is MEMBERSHIP: the runner adopts your signet, so its family gate admits your devices, and you
-# dial with a badge your key self-signs. That capability IS the authentication.
+# The flagship Action: expose a GitHub runner as a theia node over the overlay, with no SSH keys to manage.
+# `uses: theia-hq/swoosh-action@v2` in any workflow, with the authkey secret, and `swoosh ssh me/<label>`
+# reaches the runner. The shell is a keyless SSH server (the sshh crate): it has no ssh keys of its own.
+# What authorizes a session is MEMBERSHIP: the runner adopts your signet, so its family gate admits your
+# devices, and you dial with a badge your key self-signs. That capability IS the authentication. WITHOUT an
+# authkey the runner is SELF-ROOTED instead: it mints its own key and trusts only that key, so no device
+# reaches it by membership; a later step mints and publishes a capability link rooted on the runner itself.
 name: swoosh-ssh
-description: Expose this runner as a theia node (keyless shell + ping/speed by default, more on request) over the overlay, reachable by membership across GitHub's NAT.
+description: Expose this runner as a theia node (keyless shell + ping/speed by default, more on request) over the overlay, reachable by membership across GitHub's NAT, or self-rooted with a capability link when no authkey is set.
 
 inputs:
   authkey:
     description: >
       A one-time authkey minted on your laptop (`swoosh mint <label>`). The runner ADOPTS it to become that
       derived device identity AND to trust your signet, so your family gate admits you by membership, with
-      no per-key allowlist. A SECRET (it carries the device seed): pass a GitHub secret.
-    required: true
+      no per-key allowlist. A SECRET (it carries the device seed): pass a GitHub secret. OMIT for a
+      self-rooted node: the runner mints its own key, trusts only that key, and is reached by a capability
+      link a later step mints and publishes.
+    required: false
+    default: ""
   services:
     description: >
       the services to expose, space-separated `name=target` (see `swoosh serve`). Defaults to a full node:
@@ -23,13 +28,15 @@ inputs:
       is refused.
     required: false
     default: "ssh=sshd: ping=ping: speed=speed:"
-  minutes:
+  expires:
     description: >
-      hold the job open this many minutes so the node stays reachable for external or interactive use (ssh
-      in, do your thing, then it stops). The node also stops itself when the deadline passes, or on a remote
-      `swoosh stop`, whichever comes first. OMIT to run non-blocking: the step ends, the node stays
-      reachable until the job ends, and the workflow ADVANCES to your next steps. End a hold early with
-      `swoosh stop --at me/<label>` from your laptop.
+      bound the node's life with a duration (`30m`, `2h`, `1d`, exactly as `swoosh serve --expires`
+      parses). When set, the step runs serve in the foreground and lives exactly as long as the node: at
+      the deadline, or on a remote `swoosh stop`, the node ends gracefully and the step passes; a real
+      serve failure fails the step with the redacted stderr. OMIT to return as soon as the node is up: the
+      node keeps serving until the job ends and the workflow advances. Refused without an authkey: a
+      self-rooted node is reached by a capability link that later steps must mint and publish, and a step
+      held open blocks them.
     required: false
     default: ""
   version:
@@ -39,6 +46,19 @@ inputs:
       Pin for reproducible runs; `latest` for always-current.
     required: false
     default: "latest"
+
+outputs:
+  node-id:
+    description: >
+      The node's public key (`bf01...`), the address peers dial. In adopt mode the adopted device's key;
+      with no authkey, the key the runner just minted. Public, not a secret: reaching anything still needs
+      a badge or a capability link.
+    value: ${{ steps.node.outputs['node-id'] }}
+  services:
+    description: >
+      The services the node serves, space-separated `name=target`, exactly as passed to `serve` (the input,
+      or its default).
+    value: ${{ steps.node.outputs.services }}
 
 runs:
   using: composite
@@ -50,11 +70,12 @@ runs:
         SWOOSH_REF: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        # The runner needs only swoosh now: it `adopt`s the authkey AND serves the services (`swoosh
-        # serve`), one binary, no `tightbeam` on PATH. Verify BOTH a checksum and the keyless build-provenance
-        # attestation before the binary ever runs: `gh attestation verify` proves it was built by theia-hq's
-        # release workflow (sigstore/OIDC), so a swapped release binary is refused. Never `curl | sudo` blind.
-        # `latest` installs the newest release; a pinned tag installs that tag for reproducible runs.
+        # The runner needs only swoosh now: it `adopt`s an authkey or self-roots AND serves the services
+        # (`swoosh serve`), one binary, no `tightbeam` on PATH. Verify BOTH a checksum and the keyless
+        # build-provenance attestation before the binary ever runs: `gh attestation verify` proves it was
+        # built by theia-hq's release workflow (sigstore/OIDC), so a swapped release binary is refused.
+        # Never `curl | sudo` blind. `latest` installs the newest release; a pinned tag installs that tag
+        # for reproducible runs.
         os=$(uname -s | tr '[:upper:]' '[:lower:]'); case "$os" in darwin) os=macos ;; esac
         arch=$(uname -m); case "$arch" in amd64|x86_64) arch=x86_64 ;; arm64|aarch64) arch=aarch64 ;; esac
         asset="swoosh-$arch-$os"
@@ -69,49 +90,87 @@ runs:
         gh attestation verify "$RUNNER_TEMP/swoosh" --repo theia-hq/swoosh
         sudo install -m 0755 "$RUNNER_TEMP/swoosh" /usr/local/bin/swoosh
 
-    - name: adopt your signet, serve the services, hold if asked (family-gated)
+    - name: adopt or self-root, serve the services, hold for expires (gated)
+      id: node
       shell: bash
       env:
         SWOOSH_AUTHKEY: ${{ inputs.authkey }}
         THEIA_SERVICES: ${{ inputs.services }}
-        MINUTES: ${{ inputs.minutes }}
+        EXPIRES: ${{ inputs.expires }}
       run: |
         set -euo pipefail
-        # Adopt the authkey over stdin: the pipe is a shell builtin write (`printf`), so the seed never
-        # enters argv (`ps` sees only `adopt -`) and never touches disk. The runner delivers inputs to the
-        # step as env (unavoidable), and the window is the step's own process, same-uid only on a
-        # single-tenant runner; `adopt` is the one child that holds it, and only long enough to consume it.
-        # Unset it the moment adopt returns, before any other process spawns (notably `swoosh serve`), so
-        # children never inherit it.
-        printf '%s' "$SWOOSH_AUTHKEY" | swoosh adopt -
-        unset SWOOSH_AUTHKEY
-        # Serve the requested services behind the DEFAULT family gate (rooted at the adopted signet): only
-        # your devices and delegates can reach any of them, no per-key allowlist, and no --public (serve
-        # refuses --public for sshd:, a keyless shell has no legitimate public use). --quiet: the readiness
-        # banner (node id, services, gate) is NEVER printed, so it cannot leak into the (public) log. Serves
-        # over iroh, reachable by key across the NAT.
+        # Two modes, chosen by the authkey. SET: adopt it over stdin, so the seed never enters argv (`ps`
+        # sees only `adopt -`) and never touches disk; the runner delivers inputs as env (unavoidable), and
+        # `adopt` is the one child that holds it, only long enough to consume it. Unset it the moment adopt
+        # returns, before any other process spawns (notably `swoosh serve`), so children never inherit it.
+        # EMPTY: self-rooted, no adopt: the node mints its own key and gates on it.
+        SELF_ROOTED=false
+        if [ -n "$SWOOSH_AUTHKEY" ]; then
+          printf '%s' "$SWOOSH_AUTHKEY" | swoosh adopt -
+          unset SWOOSH_AUTHKEY
+        else
+          SELF_ROOTED=true
+          echo "::warning::no authkey: self-rooted mode; this node trusts only its own root, so your devices will not reach it. Set the authkey secret to adopt."
+          if [ -n "$EXPIRES" ]; then
+            # A self-rooted node's only reach is a capability link minted and published by a LATER step.
+            # `expires` keeps THIS step alive until the node is gone, so those steps never run; teach the
+            # working shape instead of holding a node nobody can reach. Checked before the home is set up so
+            # a refused run does not touch the job's environment.
+            echo "::error::expires cannot be combined with an empty authkey: a self-rooted node is reached by a capability link that later steps must mint and publish, and expires holds this step until the node is gone. Run without expires, mint and publish in later steps, then keep the job alive with a final step."
+            exit 1
+          fi
+          # A fresh per-job home. `serve` persists its identity in the node home, and on a self-hosted
+          # runner the default home may still hold an earlier job's (or an adopted) identity, which serve
+          # would then gate on instead of itself. `SWOOSH_HOME` moves the whole node (key, signet,
+          # contacts) to a new dir under RUNNER_TEMP; exporting it through $GITHUB_ENV lets a later step's
+          # `swoosh grant issue` mint from the SAME root. The rm -rf is what makes it FRESH even when
+          # RUNNER_TEMP itself persists.
+          SWOOSH_HOME="$RUNNER_TEMP/swoosh-home"
+          rm -rf -- "$SWOOSH_HOME"
+          export SWOOSH_HOME
+          echo "SWOOSH_HOME=$SWOOSH_HOME" >> "$GITHUB_ENV"
+        fi
+        # `swoosh identity` prints the NodeId first (minting the key when the home has none), the full
+        # public key a peer dials; in adopt mode it prints the adopted device's key. Captured before
+        # `serve` binds, so both outputs are settled while the identity is.
+        identity_out=$(swoosh identity)
+        NODE_ID=$(printf '%s\n' "$identity_out" | sed -n '1p')
         read -ra SERVICES <<< "$THEIA_SERVICES"
-        # `0` is no hold: `Lifetime` refuses a zero span (`0m`), and the non-blocking default is what OMIT
-        # already means. Normalize it away once, so `-n "$MINUTES"` alone arms both the node's own
-        # `--expires` deadline and the hold loop below.
-        case "$MINUTES" in "" | 0) MINUTES="" ;; esac
+        # Serve the requested services behind the node's gate (the adopted signet, or the node's own key
+        # in self-rooted mode): no per-key allowlist, no --public. --quiet: the readiness banner (node id,
+        # services, gate) is NEVER printed, so it cannot leak into the (public) log; serve stderr is held
+        # in a file so a failure echoes with every `bf01...` redacted.
         SERVE_ARGS=("${SERVICES[@]}" --quiet)
-        if [ -n "$MINUTES" ]; then
-          # The node carries its own local deadline, so a persistent self-hosted runner cannot leave a live
-          # node behind if the step is killed before the hold below ends it.
-          SERVE_ARGS+=(--expires "${MINUTES}m")
+        if [ -n "$EXPIRES" ]; then
+          # expires: serve in the FOREGROUND, so this step lives exactly as long as the node. `--expires`
+          # is a local timer with no security surface: at the deadline the node shuts down gracefully (the
+          # same stop a remote `swoosh stop` gives) and serve exits 0, so both clean ends pass the step. A
+          # nonzero exit is a real failure; print the redacted stderr and fail with serve's code. On a
+          # clean exit the node did come up (only a bound node can be stopped), so settle both outputs
+          # before the step ends and never emit them for a node that never served.
+          code=0
+          swoosh serve "${SERVE_ARGS[@]}" --expires "$EXPIRES" 2> "$RUNNER_TEMP/expose.err" || code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "::error::swoosh serve exited $code." >&2
+            sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/expose.err" >&2 || true
+            exit "$code"
+          fi
+          {
+            echo "node-id=$NODE_ID"
+            echo "services=$THEIA_SERVICES"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
         fi
         swoosh serve "${SERVE_ARGS[@]}" 2> "$RUNNER_TEMP/expose.err" &
         pid=$!
         # Fail fast: give serve a moment, then verify it is alive, so a dead node (bad authkey, gate, port)
-        # surfaces HERE with the key redacted, not silently later. Without `minutes` the step ends here and
-        # the backgrounded serve persists for the rest of the job (the non-blocking default); with one, the
-        # hold below keeps this step alive until release.
+        # surfaces HERE with the key redacted, not silently later. Without expires the step ends after the
+        # check and the backgrounded serve persists for the rest of the job.
         sleep 2
         if ! kill -0 "$pid" 2>/dev/null; then
-          # Died before the check: classify by exit code the same way the hold below does, so an instant
-          # graceful release (a remote stop landing within the window exits 0) is not read as a startup
-          # crash; a nonzero exit still surfaces loud with the redacted log.
+          # Died before the check: classify by exit code, so an instant graceful release (a remote stop
+          # landing within the window exits 0) is not read as a startup crash; a nonzero exit still
+          # surfaces loud with the redacted log.
           code=0
           wait "$pid" 2>/dev/null || code=$?
           if [ "$code" -ne 0 ]; then
@@ -122,33 +181,26 @@ runs:
           echo "released early."
           exit 0
         fi
-        echo "node reachable over the overlay by key. from your laptop: swoosh ssh me/<label> (or ping/speed/fetch)."
-        if [ -z "$MINUTES" ]; then
-          exit 0
+        # The node is up: settle both action outputs (the full public key and the requested service list)
+        # for a later step to compose instructions or a PR comment. Outputs are public: no capability link
+        # is minted or emitted here, ever.
+        {
+          echo "node-id=$NODE_ID"
+          echo "services=$THEIA_SERVICES"
+        } >> "$GITHUB_OUTPUT"
+        if [ "$SELF_ROOTED" = true ]; then
+          # No members to name: point at the later mint-and-publish step and this step's node-id output,
+          # never at a `me/<label>` dialogue that needs a signet to exist.
+          echo "node reachable over the overlay by key. no members: mint and publish a capability link from a later step (swoosh grant issue <service>); this step's node-id output carries the key."
+        else
+          echo "node reachable over the overlay by key. from your laptop: swoosh ssh me/<label> (or ping/speed/fetch)."
         fi
-        # Only when `minutes` is set: hold the job open. The serve above is THIS shell's child, so `wait`
-        # below reaps its real exit code; a pid left behind by an earlier step cannot be waited on. A remote
-        # `swoosh stop` exits 0 by design (a clean early release, not a crash); a genuine failure exits
-        # nonzero and the error branch prints the redacted stderr.
-        deadline=$(( SECONDS + MINUTES * 60 ))
-        echo "holding open for ${MINUTES}m. early release: swoosh stop --at me/<label> from your laptop."
-        while [ "$SECONDS" -lt "$deadline" ]; do
-          if ! kill -0 "$pid" 2>/dev/null; then
-            break
+        if [ "$RUNNER_ENVIRONMENT" = "self-hosted" ]; then
+          # A persistent runner that leaves a node behind: on an adopted node `expires` bounds it. A
+          # self-rooted node refuses expires, so its warning names the authkey route instead.
+          if [ "$SELF_ROOTED" = true ]; then
+            echo "::warning::no expires deadline is set, and self-rooted mode refuses expires: this node serves until the job ends. Set the authkey secret to adopt if you need expires to bound a node."
+          else
+            echo "::warning::no expires deadline is set: this node serves until the job ends; set expires (e.g. expires: 30m) to bound it."
           fi
-          sleep 5
-        done
-        # Deadline expiry with the node still alive: SIGINT, the interrupt serve maps to exit 0 (the same
-        # graceful stop Ctrl-C and `swoosh stop` take). SIGTERM has no handler and would reap as 143, which
-        # would read as a crash. An early remote stop already ended the process: the kill is a no-op then.
-        if kill -0 "$pid" 2>/dev/null; then
-          kill -INT "$pid" 2>/dev/null || true
         fi
-        code=0
-        wait "$pid" 2>/dev/null || code=$?
-        if [ "$code" -ne 0 ]; then
-          echo "::error::the node exited before the hold ended." >&2
-          sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/expose.err" >&2 || true
-          exit "$code"
-        fi
-        echo "released early."

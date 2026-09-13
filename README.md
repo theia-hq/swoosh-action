@@ -7,7 +7,7 @@ then dial `me/ci-runner` while the job runs.
 ## Quickstart
 
 This workflow serves the default set (a keyless shell, `ping`, and `speed`) and holds the runner open for
-30 minutes:
+`30m`:
 
 ```yaml
 name: swoosh
@@ -20,25 +20,29 @@ jobs:
       - uses: theia-hq/swoosh-action@v2
         with:
           authkey: ${{ secrets.THEIA_AUTHKEY }}
-          minutes: 30
+          expires: 30m
 ```
 
 Save it as `.github/workflows/swoosh.yml`, push it to your default branch, then run it from the Actions
 tab or with `gh workflow run swoosh.yml`.
 
-`authkey` is required. The runner adopts it to become the device identity
-[`swoosh mint`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/mint.md) derived and
-to trust the root key that minted it (your signet), so its gate admits your devices and the delegates you
-grant. The authkey carries a device seed: keep it in a repository secret, never in the workflow file. The
-action pipes the secret into `adopt` on stdin, so it never enters the command line or a file, and unsets
-the environment variable before any other process starts. [Prerequisites](#prerequisites) has the commands
-that produce it.
+`authkey` is optional. Set it to the value `swoosh mint` printed: the runner adopts it to become the
+device identity [`swoosh mint`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/mint.md)
+derived and to trust the root key that minted it (your signet), so its gate admits your devices and the
+delegates you grant. The authkey carries a device seed: keep it in a repository secret, never in the
+workflow file. The action pipes the secret into `adopt` on stdin, so it never enters the command line or a
+file, and unsets the environment variable before any other process starts. Omit it to
+[run self-rooted](#self-rooted-nodes) instead. [Prerequisites](#prerequisites) has the commands that
+produce it.
 
 `services` is optional and defaults to `ssh=sshd: ping=ping: speed=speed:`.
 [Serve more than a shell](#serve-more-than-a-shell) has the grammar, examples, and reference links.
 
-`minutes` is optional and unset by default. Set it to hold the job open while you work on the runner.
-[Hold the job open](#hold-the-job-open) covers what happens without it and how to end a hold early.
+`expires` is optional and unset by default. Set a duration (`30m`, `2h`, `1d`, as `swoosh serve --expires`
+parses) to bound the node: the step then runs serve in the foreground and lives exactly as long as the
+node. Omit it and the step returns once the node is up, with the node serving until the job ends. It is
+refused without an `authkey` (a self-rooted node is reached by a link later steps mint).
+[Hold the job open](#hold-the-job-open) has the details.
 
 `version` is optional and defaults to `latest`, the newest swoosh release. Set a release tag such as
 `v0.8.0` to pin it. [Choose the swoosh version](#choose-the-swoosh-version) covers the install check.
@@ -51,7 +55,7 @@ that produce it.
    [`swoosh identity`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/identity.md)
    prints its key.
 2. The authkey: run `swoosh mint ci-runner` on that laptop. It prints the authkey and records the contact
-   `me/ci-runner`, the name you dial later.
+   `me/ci-runner`, the name you dial later. A [self-rooted node](#self-rooted-nodes) skips this.
 3. A Linux or macOS runner and a GitHub repository you can set secrets on. With the [`gh`
    CLI](https://cli.github.com) installed, run `gh secret set THEIA_AUTHKEY` and paste the authkey; or add
    it in the repository under Settings > Secrets and variables > Actions. The workflow reads it as
@@ -102,18 +106,22 @@ covers `--public` on a node you run yourself.
 
 ## Hold the job open
 
-Without `minutes` the action returns once the node is up: the node keeps serving in the background and the
-workflow moves on to your next steps. With `minutes`, the step stays alive until the hold runs out or the
-node is stopped early. From your laptop:
+Set `expires` to a duration (`30m`, `2h`, `1d`): the step then runs `swoosh serve` in the foreground and
+lives exactly as long as the node. At the deadline, or on a remote stop, the node ends gracefully and the
+step passes; a real serve failure fails the step with the redacted stderr.
+
+Omit `expires` and the step returns once the node is up, while the node keeps serving until the job ends.
+The action checks the node is alive before it reports it reachable, so a node that died at startup fails
+the step with the redacted error. On a self-hosted runner, the action warns that no deadline is set.
+
+From your laptop, end the node early:
 
 ```sh
 swoosh stop --at me/ci-runner
 ```
 
-The stop reaches the node's gated control service and tears it down; the action logs `released early.` and
-the step passes. The action checks the serve process is alive before it reports the node reachable, and
-keeps checking during the hold, so a node that died fails the step with the redacted error instead of a
-blind sleep.
+The stop reaches the node's gated control service and tears it down; with `expires` set, the step then
+passes.
 
 ## Reach it
 
@@ -123,10 +131,11 @@ swoosh ping me/ci-runner     # round-trip time
 swoosh speed me/ci-runner    # throughput
 ```
 
-The action reports the node reachable once the serve process is up. Over iroh a session often starts
-relayed and hole-punches to a direct path, so a `swoosh ping` run can read `(upgraded from relayed)`
-mid-run, and `swoosh status me/ci-runner` names the path you are on. From your laptop, run
-`swoosh ping me/ci-runner` to confirm reachability before a later step depends on the node.
+Without `expires` the action reports the node reachable once serve is up, and the node keeps serving until
+the job ends. With `expires` the step is the node running, so connect while the step runs. Over iroh a
+session often starts relayed and hole-punches to a direct path, so a `swoosh ping` run can read
+`(upgraded from relayed)` mid-run, and `swoosh status me/ci-runner` names the path you are on. From your
+laptop, run `swoosh ping me/ci-runner` to confirm reachability before a later step depends on the node.
 
 For the end-to-end deployment, the [`theia-hq/qat`](https://github.com/theia-hq/qat) template runs this
 action on demand to give a developer a keyless shell on a runner.
@@ -146,6 +155,44 @@ swoosh send app.tar deploybox
 Each file is verified end to end on arrival, and the box's gate admits the runner by its membership
 badge. The same step can run `swoosh ssh deploybox -- <command>` instead. The full walkthrough is
 [Use swoosh from CI](https://github.com/theia-hq/swoosh/blob/main/docs/use-cases/ci-runner.md).
+
+## Outputs
+
+The action publishes two outputs for a later step to compose instructions or a PR comment. Give the action
+step an `id` (here `node`), then read them in a later step:
+
+```yaml
+      - id: node
+        uses: theia-hq/swoosh-action@v2
+        with:
+          authkey: ${{ secrets.THEIA_AUTHKEY }}
+      - run: echo "node ${{ steps.node.outputs['node-id'] }} serves ${{ steps.node.outputs.services }}"
+```
+
+- `node-id`: the node's public key (`bf01...`), the address peers dial. In adopt mode it is the adopted
+  device's key; self-rooted, the key the runner just minted.
+- `services`: the services the node serves, `name=target`, exactly as passed to the action (the input or
+  its default).
+
+Both are public: no capability link is minted or emitted by the action. Without `expires` they settle
+while the node is still serving; with `expires`, when the node ends cleanly.
+
+## Self-rooted nodes
+
+Leave `authkey` empty and the runner roots itself: it mints its own key and trusts only that key, so none
+of your devices reach it by membership. The action warns in the log that the node trusts only its own root,
+so your devices will not reach it, and that setting the authkey secret adopts instead. There is no
+`me/<label>` contact to dial.
+
+Reach is then a capability link a later step mints and publishes (`swoosh grant issue <service>`), using
+this step's `node-id` output. The later step mints from the same home the node served under: the action
+exports `SWOOSH_HOME` for the rest of the job, which the 0.9.0 client honors. An older client ignores it
+and reuses the default home, so on a persistent self-hosted runner the node can come up under an earlier
+job's identity.
+
+`expires` is refused with an empty `authkey`: a self-rooted node is reached by a link later steps must mint
+and publish, and a held step blocks them. Run without `expires`, mint and publish in later steps, and keep
+the job alive with a final step.
 
 ## Rotate the authkey
 
@@ -177,24 +224,26 @@ asset is refused.
 
 ## The node id is a public key, and the log is public
 
-The node id is a public key, not a secret: knowing it grants nothing without a badge from your signet, and
-every service stays behind the gate. The action still serves with `--quiet`, because a CI log is a public
-record: the readiness banner (the full node key, the service list, the gate) never prints, and an
-accidental `cat` cannot republish the node's address. On a failure the action rewrites every `bf01...` in
-the node's stderr to `bf01<redacted>` before echoing it.
+The node id is a public key, not a secret: knowing it grants nothing without a badge from your signet (or
+a capability link when the node is self-rooted), and every service stays behind the gate. The action still
+serves with `--quiet`, because a CI log is a public record: the readiness banner (the full node key, the
+service list, the gate) never prints, and an accidental `cat` cannot republish the node's address. On a
+failure the action rewrites every `bf01...` in the node's stderr to `bf01<redacted>` before echoing it.
 
-`adopt` prints the derived device's short label (like `bf01ueeh4voppqea`), never the full node key. The
-full key is the address a stranger would dial, and it stays on the two machines that need it: the node's
-home and your contacts. Your own terminal or a private log is a fine place to show it; a public CI log is
-not. Unlike tmate's printed connection string, nothing has to be read back from the log to reach the node.
+In adopt mode, `adopt` prints the derived device's short label (like `bf01ueeh4voppqea`), never the full
+node key. The full key is the address a stranger would dial, and it stays on the two machines that need
+it: the node's home and your contacts. Your own terminal or a private log is a fine place to show it; a
+public CI log is not. Unlike tmate's printed connection string, nothing has to be read back from the log
+to reach the node.
 
 ## Self-hosted runners
 
 On a runner that persists between jobs, the swoosh binary stays installed in `/usr/local/bin`, and the
 next job's `adopt` replaces the previous identity with the authkey that run provides. A self-hosted runner
 needs the `gh` CLI on `PATH`, because the install step verifies the binary's provenance with
-`gh attestation verify`. Set `minutes` so each hold ends itself; without it the node keeps serving after
-the step returns, and the action does not stop a node left by an earlier job.
+`gh attestation verify`. Set `expires` so the node carries its own deadline and no node outlives the job;
+without it the action warns that no deadline is set and the node serves until the job ends. The action
+does not stop a node left by an earlier job.
 
 ## Debug a runner
 
@@ -207,10 +256,10 @@ with `if: failure()`:
   uses: theia-hq/swoosh-action@v2
   with:
     authkey: ${{ secrets.THEIA_AUTHKEY }}
-    minutes: 20
+    expires: 20m
 ```
 
-A job's `timeout-minutes` is a hard cap; the action's own hold is `minutes`.
+A job's `timeout-minutes` is a hard cap; the action's own deadline is `expires`.
 
 ## Troubleshooting
 
@@ -220,22 +269,23 @@ A job's `timeout-minutes` is a hard cap; the action's own hold is `minutes`.
 Error: not an authkey (expected the `authkey:` prefix)
 ```
 
-The `swoosh adopt` step failed because the secret does not hold the value `swoosh mint` printed. The
-usual cause is a missing or renamed secret: `${{ secrets.THEIA_AUTHKEY }}` evaluates to empty, and
-`adopt` rejects the empty value. A truncated paste, a capability link (`sheer:...`), or a path fails the
-same way. Set the repository secret to the whole minted value, under the name the workflow references:
+The secret is set but does not hold the value `swoosh mint` printed: a truncated paste, a capability link
+(`sheer:...`), or a path. Set the repository secret to the whole minted value, under the name the workflow
+references:
 
 ```sh
 gh secret set THEIA_AUTHKEY
 ```
 
-The other parse failures (`malformed authkey ...`, `invalid base32 in authkey seed`, `authkey seed is not
-32 bytes`, `invalid signet in authkey`) have the same fix. Secrets are not passed to workflows triggered
-by pull requests from forks, so the action cannot run there.
+An empty secret is not this error: the node self-roots with a warning. The other parse failures
+(`malformed authkey ...`, `invalid base32 in authkey seed`, `authkey seed is not 32 bytes`, `invalid signet
+in authkey`) have the same fix. Secrets are not passed to workflows triggered by pull requests from forks,
+so a fork run self-roots with the warning instead of adopting your signet.
 
-### The hold ended early
+### The node exited early
 
-`released early.` with a passing step means the node was stopped, from your laptop or at the deadline:
-that is the intended release. If the step instead fails with `::error::the node exited before the hold
-ended.` or `::error::swoosh serve exited immediately.`, the node exited nonzero and the redacted stderr
-below the error names why (`bf01...` is scrubbed to `bf01<redacted>`).
+With `expires`, the node ends at its deadline or on a remote stop and the step passes; a real serve
+failure fails the step with `::error::swoosh serve exited ...` and the redacted stderr below it. Without
+`expires`, a node that dies in the first two seconds fails the step with
+`::error::swoosh serve exited immediately.`, or prints `released early.` when a stop landed in that window.
+In every failure the stderr names the cause with `bf01...` scrubbed to `bf01<redacted>`.
