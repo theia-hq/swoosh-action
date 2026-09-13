@@ -29,8 +29,10 @@ tab or with `gh workflow run swoosh.yml`.
 `authkey` is required. The runner adopts it to become the device identity
 [`swoosh mint`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/mint.md) derived and
 to trust the root key that minted it (your signet), so its gate admits your devices and the delegates you
-grant. The authkey carries a device seed: keep it in a repository secret, never in the workflow file.
-[Prerequisites](#prerequisites) has the commands that produce it.
+grant. The authkey carries a device seed: keep it in a repository secret, never in the workflow file. The
+action pipes the secret into `adopt` on stdin, so it never enters the command line or a file, and unsets
+the environment variable before any other process starts. [Prerequisites](#prerequisites) has the commands
+that produce it.
 
 `services` is optional and defaults to `ssh=sshd: ping=ping: speed=speed:`.
 [Serve more than a shell](#serve-more-than-a-shell) has the grammar, examples, and reference links.
@@ -50,11 +52,10 @@ grant. The authkey carries a device seed: keep it in a repository secret, never 
    prints its key.
 2. The authkey: run `swoosh mint ci-runner` on that laptop. It prints the authkey and records the contact
    `me/ci-runner`, the name you dial later.
-3. A GitHub repository you can set secrets on. With the [`gh` CLI](https://cli.github.com) installed, run
-   `gh secret set THEIA_AUTHKEY` and paste the authkey; or add it in the repository under Settings >
-   Secrets and variables > Actions. The workflow reads it as `${{ secrets.THEIA_AUTHKEY }}`.
-4. A Linux or macOS runner. GitHub-hosted runners need no setup. A self-hosted runner needs the `gh` CLI
-   on `PATH`, because the install step verifies the binary's provenance with `gh attestation verify`.
+3. A Linux or macOS runner and a GitHub repository you can set secrets on. With the [`gh`
+   CLI](https://cli.github.com) installed, run `gh secret set THEIA_AUTHKEY` and paste the authkey; or add
+   it in the repository under Settings > Secrets and variables > Actions. The workflow reads it as
+   `${{ secrets.THEIA_AUTHKEY }}`.
 
 ## Serve more than a shell
 
@@ -74,6 +75,21 @@ The set you can serve depends on the swoosh release the action installs
 target and how it is gated, and
 [`swoosh serve`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/serve.md) has the
 full `name=target` grammar.
+
+## Reach a service the job runs
+
+The job can serve a local port (a preview build, a dashboard): set `services: "web=127.0.0.1:8080"`,
+which replaces the default set, and keep the job open for the review window. On your laptop,
+`swoosh grant issue web --expires 4h` mints a capability link and `swoosh contact ls me` prints the
+runner's full key; hand reviewers this line:
+
+```sh
+swoosh forward <node-key> --service web --to 8080 --present sheer:<link>
+```
+
+Then open `http://127.0.0.1:8080`. `forward` dials anonymously by construction, so the link is the way in
+even for your own devices; it reaches only `web` and expires with the window. Secrets do not reach fork
+pull requests, so this is for same-repo branches.
 
 ## This action exposes no public service
 
@@ -114,6 +130,22 @@ mid-run, and `swoosh status me/ci-runner` names the path you are on. From your l
 
 For the end-to-end deployment, the [`theia-hq/qat`](https://github.com/theia-hq/qat) template runs this
 action on demand to give a developer a keyless shell on a runner.
+
+## Let the job reach your machines
+
+The runner is a member device, so it can dial out as well as be dialed. Serve a receiver on one of your
+machines (`swoosh serve recv=recv:/srv/releases`) and run the action non-blocking: it returns while the
+workflow advances, and a later step pushes the artifact. The runner's contact store is empty after
+`adopt`, so name the peer by key (or add it once):
+
+```sh
+swoosh contact add deploybox bf01<box-key>
+swoosh send app.tar deploybox
+```
+
+Each file is verified end to end on arrival, and the box's gate admits the runner by its membership
+badge. The same step can run `swoosh ssh deploybox -- <command>` instead. The full walkthrough is
+[Use swoosh from CI](https://github.com/theia-hq/swoosh/blob/main/docs/use-cases/ci-runner.md).
 
 ## Rotate the authkey
 
@@ -159,9 +191,10 @@ not. Unlike tmate's printed connection string, nothing has to be read back from 
 ## Self-hosted runners
 
 On a runner that persists between jobs, the swoosh binary stays installed in `/usr/local/bin`, and the
-next job's `adopt` replaces the previous identity with the authkey that run provides. Set `minutes` so
-each hold ends itself; without it the node keeps serving after the step returns, and the action does not
-stop a node left by an earlier job.
+next job's `adopt` replaces the previous identity with the authkey that run provides. A self-hosted runner
+needs the `gh` CLI on `PATH`, because the install step verifies the binary's provenance with
+`gh attestation verify`. Set `minutes` so each hold ends itself; without it the node keeps serving after
+the step returns, and the action does not stop a node left by an earlier job.
 
 ## Debug a runner
 
