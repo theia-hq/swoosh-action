@@ -11,7 +11,7 @@ description: Expose this runner as a theia node (keyless shell + ping/speed by d
 inputs:
   authkey:
     description: >
-      A one-time authkey minted on your laptop (`swoosh mint <label>`). The runner ADOPTS it to become that
+      A one-time invite minted on your laptop (`swoosh invite add <label> --for <device-key>`). The runner ADOPTS it to become that
       derived device identity AND to trust your signet, so your family gate admits you by membership, with
       no per-key allowlist. A SECRET (it carries the device seed): pass a GitHub secret. OMIT for a
       self-rooted node: the runner mints its own key, trusts only that key, and is reached by a capability
