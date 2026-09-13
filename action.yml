@@ -97,8 +97,18 @@ runs:
         SWOOSH_AUTHKEY: ${{ inputs.authkey }}
         THEIA_SERVICES: ${{ inputs.services }}
         EXPIRES: ${{ inputs.expires }}
+        # Pin every child of this step to errors only. The default filter surfaces the recv activity line,
+        # and the failure paths below republish this step's stderr (expose.err) to the public log; the pin
+        # keeps peer-influenced activity out of that echo and refuses a RUST_LOG=debug inherited from the
+        # workflow, so the echo cannot widen.
+        RUST_LOG: error
       run: |
         set -euo pipefail
+        # expose.err is per-INVOCATION, not per-job: RUNNER_TEMP persists on a self-hosted runner, and the
+        # file holds serve's diagnostics until they are read. Remove it on EVERY exit path (clean, failure,
+        # or the step ending over a backgrounded serve), so no arrival record survives the step. A
+        # backgrounded serve keeps its open fd; the path is unlinked, not left behind.
+        trap 'rm -f "$RUNNER_TEMP/expose.err"' EXIT
         # Two modes, chosen by the authkey. SET: adopt it over stdin, so the seed never enters argv (`ps`
         # sees only `adopt -`) and never touches disk; the runner delivers inputs as env (unavoidable), and
         # `adopt` is the one child that holds it, only long enough to consume it. Unset it the moment adopt
