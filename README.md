@@ -38,6 +38,14 @@ produce it.
 `services` is optional and defaults to `ssh=sshd: ping=ping: speed=speed:`.
 [Serve more than a shell](#serve-more-than-a-shell) has the grammar, examples, and reference links.
 
+`public` is optional and empty by default: every service stays behind your gate. Set it to a
+comma-separated list of services to open to anyone, exactly as `swoosh serve --public` takes them (e.g.
+`ping,speed`). Only `ping`, `speed`, and `fetch` may be opened, and each must be bound to its matching
+built-in target in `services`: `ping=ping:`, `speed=speed:`, or `fetch=fetch:<origin>`. Any other shape,
+including a forward, `echo`, a raw stream, a `--public-unsafe` shape, a name bound to another target, or a
+name you do not serve, is refused before serve runs. The node enforces `fetch`'s origin scope.
+[Open a service to anyone](#open-a-service-to-anyone) has the details.
+
 `expires` is optional and unset by default. Set a duration (`30m`, `2h`, `1d`, as `swoosh serve --expires`
 parses) to bound the node: the step then runs serve in the foreground and lives exactly as long as the
 node. Omit it and the step returns once the node is up, with the node serving until the job ends. It is
@@ -95,14 +103,34 @@ Then open `http://127.0.0.1:8080`. `forward` dials anonymously by construction, 
 even for your own devices; it reaches only `web` and expires with the window. Secrets do not reach fork
 pull requests, so this is for same-repo branches.
 
-## This action exposes no public service
+## Open a service to anyone
 
-This action exposes no public service today. Every service sits behind your gate: only your own devices
-and the delegates you grant can reach any of them. `--public` is a `swoosh serve` feature, not an input
-of this action, and nothing here turns it on. The keyless shell refuses it because a public shell is
-remote code execution for strangers: `swoosh serve` rejects `--public` for `sshd:` by name. The
-[public service page](https://github.com/theia-hq/swoosh/blob/main/docs/use-cases/public-service.md)
-covers `--public` on a node you run yourself.
+Every service is gated by default: only your own devices and the delegates you grant reach any of them.
+Set `public` to open named services to anyone, unauthenticated:
+
+```yaml
+- uses: theia-hq/swoosh-action@v2
+  with:
+    authkey: ${{ secrets.THEIA_AUTHKEY }}
+    services: "ping=ping: speed=speed: fetch=fetch:https://news.example"
+    public: ping,speed,fetch
+```
+
+Only the names you list are opened, and each must be a service you serve. The eligible set is exactly
+`ping=ping:`, `speed=speed:`, and `fetch=fetch:<origin>`: the name must be bound to its matching built-in
+target in `services`, so a public `fetch` requires an entry like `fetch=fetch:https://news.example`. Any
+other shape is refused before `serve` runs, including a forward, `echo`, a raw stream
+(`file:`/`fifo:`/`stdin:`), a name bound to another target, a name you do not serve, and anything shaped
+like `--public-unsafe`. The node enforces `fetch`'s origin scope: an origin-scoped fetch opens, and a bare
+`fetch:` is refused at startup as an open relay. A public `ping` or `speed` is metered by the node: a
+per-caller run interval, one transfer at a time, and byte and wall-clock caps.
+
+**The honest limit.** A public service is reachable by anyone who knows the node's key. There is no link
+to expire and no badge to revoke; `expires` or the end of the job is the bound. The key is public by
+design and grants nothing for the gated services.
+
+[Public service](https://github.com/theia-hq/swoosh/blob/main/docs/use-cases/public-service.md) covers
+`--public` on a node you run yourself.
 
 ## Hold the job open
 
