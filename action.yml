@@ -28,6 +28,16 @@ inputs:
       is refused.
     required: false
     default: "ssh=sshd: ping=ping: speed=speed:"
+  public:
+    description: >
+      open named services to anyone, unauthenticated (a comma-list, exactly as `swoosh serve --public`
+      takes it; e.g. `ping,speed`). Empty by default: every service stays behind your gate. The eligible
+      set is exactly a `ping=ping:`, `speed=speed:`, or `fetch=fetch:<origin>` service: each public name
+      must be bound to its matching built-in target in `services`. Any other shape, including a forward,
+      `echo`, a raw stream, a `--public-unsafe` shape, a name bound to another target, or a name you do
+      not serve, is refused before serve runs. The node enforces `fetch`'s origin scope.
+    required: false
+    default: ""
   expires:
     description: >
       bound the node's life with a duration (`30m`, `2h`, `1d`, exactly as `swoosh serve --expires`
@@ -96,6 +106,7 @@ runs:
       env:
         SWOOSH_AUTHKEY: ${{ inputs.authkey }}
         THEIA_SERVICES: ${{ inputs.services }}
+        THEIA_PUBLIC: ${{ inputs.public }}
         EXPIRES: ${{ inputs.expires }}
         # Pin every child of this step to errors only. The default filter surfaces the recv activity line,
         # and the failure paths below republish this step's stderr (expose.err) to the public log; the pin
@@ -146,11 +157,62 @@ runs:
         identity_out=$(swoosh identity)
         NODE_ID=$(printf '%s\n' "$identity_out" | sed -n '1p')
         read -ra SERVICES <<< "$THEIA_SERVICES"
+        # The action-side half of the eligible-set guard: the exclusion lives in the input parse, so
+        # manual `serve --public` semantics stay untouched. Split on commas only; no trimming, so a token
+        # is compared exactly as typed (` speed` is not `speed`). A public name must be ping, speed, or
+        # fetch AND bound to its matching target in services (`ping=ping:`, `speed=speed:`, or
+        # `fetch=fetch:<origin>`), so an alias (`fetch=127.0.0.1:8080`) or a forward cannot ride a built-in
+        # name. The node's own bind proof still backstops the target level.
+        PUBLIC_RULE="The eligible set is exactly ping=ping:, speed=speed:, and fetch=fetch:<origin>; forwards, echo, raw streams, and --public-unsafe are never eligible."
+        if [ -n "$THEIA_PUBLIC" ]; then
+          # A block-scalar list can hide names past the first line; refuse it here, not at serve.
+          case "$THEIA_PUBLIC" in
+            *$'\n'*)
+              echo "::error::public: the list must be one line; a newline is not allowed."
+              exit 1
+              ;;
+          esac
+          IFS=',' read -ra PUBLIC_NAMES <<< "$THEIA_PUBLIC"
+          for name in "${PUBLIC_NAMES[@]}"; do
+            case "$name" in
+              ping|speed|fetch) ;;
+              *)
+                echo "::error::public: '$name' is not eligible. $PUBLIC_RULE"
+                exit 1
+                ;;
+            esac
+            entry= target=
+            for candidate in "${SERVICES[@]}"; do
+              case "$candidate" in
+                "$name"=*)
+                  entry="$candidate"
+                  target="${candidate#*=}"
+                  break
+                  ;;
+              esac
+            done
+            if [ -z "$entry" ]; then
+              echo "::error::public: '$name' is not served: no '$name=<target>' entry in services. $PUBLIC_RULE"
+              exit 1
+            fi
+            case "$target" in
+              "$name":*) ;;
+              *)
+                echo "::error::public: '$name' is bound to '$target', not to '$name:'. $PUBLIC_RULE"
+                exit 1
+                ;;
+            esac
+          done
+        fi
         # Serve the requested services behind the node's gate (the adopted signet, or the node's own key
-        # in self-rooted mode): no per-key allowlist, no --public. --quiet: the readiness banner (node id,
-        # services, gate) is NEVER printed, so it cannot leak into the (public) log; serve stderr is held
-        # in a file so a failure echoes with every `bf01...` redacted.
+        # in self-rooted mode): no per-key allowlist. --quiet: the readiness banner (node id, services,
+        # gate) is NEVER printed, so it cannot leak into the (public) log; serve stderr is held in a file
+        # so a failure echoes with every `bf01...` redacted.
         SERVE_ARGS=("${SERVICES[@]}" --quiet)
+        if [ -n "$THEIA_PUBLIC" ]; then
+          # Verbatim passthrough, one argv: every token was proven above, and serve splits on commas.
+          SERVE_ARGS+=(--public "$THEIA_PUBLIC")
+        fi
         if [ -n "$EXPIRES" ]; then
           # expires: serve in the FOREGROUND, so this step lives exactly as long as the node. `--expires`
           # is a local timer with no security surface: at the deadline the node shuts down gracefully (the
