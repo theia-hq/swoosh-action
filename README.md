@@ -21,17 +21,17 @@ jobs:
     steps:
       - uses: theia-hq/swoosh-action@v2
         with:
-          authkey: ${{ secrets.THEIA_AUTHKEY }}
+          invite: ${{ secrets.THEIA_INVITE }}
           expires: 30m
 ```
 
 Save it as `.github/workflows/swoosh.yml`, push it to your default branch, then run it from the Actions
 tab or with `gh workflow run swoosh.yml`.
 
-`authkey` is optional. Set it to the invite `swoosh invite add` printed: the runner adopts it to become
+`invite` is optional. Set it to the invite `swoosh invite add` printed: the runner adopts it to become
 the device identity [`swoosh invite add`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/invite.md)
 derived and to trust the root key that minted it (your signet), so its gate admits your devices and the
-delegates you grant. The authkey carries a device seed: keep it in a repository secret, never in the
+delegates you grant. The invite carries a device seed: keep it in a repository secret, never in the
 workflow file. The action pipes the secret into `adopt` on stdin, so it never enters the command line or a
 file, and unsets the environment variable before any other process starts. Omit it to
 [run self-rooted](#self-rooted-nodes) instead. [Prerequisites](#prerequisites) has the commands that
@@ -51,7 +51,7 @@ name you do not serve, is refused before serve runs. The node enforces `fetch`'s
 `expires` is optional and unset by default. Set a duration (`30m`, `2h`, `1d`, as `swoosh serve --expires`
 parses) to bound the node: the step then runs serve in the foreground and lives exactly as long as the
 node. Omit it and the step returns once the node is up, with the node serving until the job ends. It is
-refused without an `authkey` (a self-rooted node is reached by a link later steps mint).
+refused without an `invite` (a self-rooted node is reached by a link later steps mint).
 [Hold the job open](#hold-the-job-open) has the details.
 
 `version` is optional and defaults to `latest`, the newest swoosh release. Set a release tag such as
@@ -64,12 +64,12 @@ refused without an `authkey` (a self-rooted node is reached by a link later step
    root key) on first use, and
    [`swoosh identity`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/identity.md)
    prints its key.
-2. The authkey: run `swoosh invite add ci-runner` on that machine. It prints a one-time invite and records
+2. The invite: run `swoosh invite add ci-runner` on that machine. It prints a one-time invite and records
    the contact `me/ci-runner`, the name you dial later. A [self-rooted node](#self-rooted-nodes) skips this.
 3. A Linux or macOS runner and a GitHub repository you can set secrets on. With the [`gh`
-   CLI](https://cli.github.com) installed, run `gh secret set THEIA_AUTHKEY` and paste the authkey; or add
+   CLI](https://cli.github.com) installed, run `gh secret set THEIA_INVITE` and paste the invite; or add
    it in the repository under Settings > Secrets and variables > Actions. The workflow reads it as
-   `${{ secrets.THEIA_AUTHKEY }}`.
+   `${{ secrets.THEIA_INVITE }}`.
 
 ## Serve more than a shell
 
@@ -79,7 +79,7 @@ set to add the services you need:
 ```yaml
 - uses: theia-hq/swoosh-action@v2
   with:
-    authkey: ${{ secrets.THEIA_AUTHKEY }}
+    invite: ${{ secrets.THEIA_INVITE }}
     services: "ssh=sshd: fetch=fetch:https://news.example web=127.0.0.1:8080 sock=unix:/path"
 ```
 
@@ -114,7 +114,7 @@ Set `public` to open named services to anyone, unauthenticated:
 ```yaml
 - uses: theia-hq/swoosh-action@v2
   with:
-    authkey: ${{ secrets.THEIA_AUTHKEY }}
+    invite: ${{ secrets.THEIA_INVITE }}
     services: "ping=ping: speed=speed: fetch=fetch:https://news.example"
     public: ping,speed,fetch
 ```
@@ -196,7 +196,7 @@ step an `id` (here `node`), then read them in a later step:
       - id: node
         uses: theia-hq/swoosh-action@v2
         with:
-          authkey: ${{ secrets.THEIA_AUTHKEY }}
+          invite: ${{ secrets.THEIA_INVITE }}
       - run: echo "node ${{ steps.node.outputs['node-id'] }} serves ${{ steps.node.outputs.services }}"
 ```
 
@@ -210,9 +210,9 @@ while the node is still serving; with `expires`, when the node ends cleanly.
 
 ## Self-rooted nodes
 
-Leave `authkey` empty and the runner roots itself: it mints its own key and trusts only that key, so none
+Leave `invite` empty and the runner roots itself: it mints its own key and trusts only that key, so none
 of your devices reach it by membership. The action warns in the log that the node trusts only its own root,
-so your devices will not reach it, and that setting the authkey secret adopts instead. There is no
+so your devices will not reach it, and that setting the invite secret adopts instead. There is no
 `me/<label>` contact to dial.
 
 Reach is then a capability link a later step mints and publishes (`swoosh grant issue <service>`), using
@@ -221,21 +221,21 @@ exports `SWOOSH_HOME` for the rest of the job, which the 0.9.0 client honors. An
 and reuses the default home, so on a persistent self-hosted runner the node can come up under an earlier
 job's identity.
 
-`expires` is refused with an empty `authkey`: a self-rooted node is reached by a link later steps must mint
+`expires` is refused with an empty `invite`: a self-rooted node is reached by a link later steps must mint
 and publish, and a held step blocks them. Run without `expires`, mint and publish in later steps, and keep
 the job alive with a final step.
 
-## Rotate the authkey
+## Rotate the invite
 
 Create a fresh invite per use or per repo, then update the secret:
 
 ```sh
 swoosh invite add ci-runner
-gh secret set THEIA_AUTHKEY
+gh secret set THEIA_INVITE
 ```
 
-The authkey carries the device's derived seed and trust for your signet, never your signet key, so a
-leaked authkey compromises that one runner and not your identity. It stays adoptable until the membership
+The invite carries the device's derived seed and trust for your signet, never your signet key, so a
+leaked invite compromises that one runner and not your identity. It stays adoptable until the membership
 badge it carries expires, so create it right before you deploy. `swoosh invite add ci-runner --expires 30d`
 shortens the window; the default is 90 days.
 
@@ -244,7 +244,7 @@ shortens the window; the default is 90 days.
 ```yaml
 - uses: theia-hq/swoosh-action@v2
   with:
-    authkey: ${{ secrets.THEIA_AUTHKEY }}
+    invite: ${{ secrets.THEIA_INVITE }}
     version: v0.9.0
 ```
 
@@ -270,7 +270,7 @@ to reach the node.
 ## Self-hosted runners
 
 On a runner that persists between jobs, the swoosh binary stays installed in `/usr/local/bin`, and the
-next job's `adopt` replaces the previous identity with the authkey that run provides. A self-hosted runner
+next job's `adopt` replaces the previous identity with the invite that run provides. A self-hosted runner
 needs the `gh` CLI on `PATH`, because the install step verifies the binary's provenance with
 `gh attestation verify`. Set `expires` so the node carries its own deadline and no node outlives the job;
 without it the action warns that no deadline is set and the node serves until the job ends. The action
@@ -286,7 +286,7 @@ with `if: failure()`:
 - if: failure()
   uses: theia-hq/swoosh-action@v2
   with:
-    authkey: ${{ secrets.THEIA_AUTHKEY }}
+    invite: ${{ secrets.THEIA_INVITE }}
     expires: 20m
 ```
 
@@ -305,7 +305,7 @@ link (`sheer:...`), or a path. Set the repository secret to the whole printed in
 workflow references:
 
 ```sh
-gh secret set THEIA_AUTHKEY
+gh secret set THEIA_INVITE
 ```
 
 An empty secret is not this error: the node self-roots with a warning. The other parse failures
