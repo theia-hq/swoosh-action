@@ -1,15 +1,15 @@
 # The flagship Action: expose a GitHub runner as a theia node over the overlay, with no SSH keys to manage.
-# `uses: theia-hq/swoosh-action@v2` in any workflow, with the authkey secret, and `swoosh ssh me/<label>`
+# `uses: theia-hq/swoosh-action@v2` in any workflow, with the invite secret, and `swoosh ssh me/<label>`
 # reaches the runner. The shell is a keyless SSH server (the sshh crate): it has no ssh keys of its own.
 # What authorizes a session is MEMBERSHIP: the runner adopts your signet, so its family gate admits your
 # devices, and you dial with a badge your key self-signs. That capability IS the authentication. WITHOUT an
-# authkey the runner is SELF-ROOTED instead: it mints its own key and trusts only that key, so no device
+# invite the runner is SELF-ROOTED instead: it mints its own key and trusts only that key, so no device
 # reaches it by membership; a later step mints and publishes a capability link rooted on the runner itself.
 name: swoosh-ssh
-description: Expose this runner as a theia node (keyless shell + ping/speed by default, more on request) over the overlay, reachable by membership across GitHub's NAT, or self-rooted with a capability link when no authkey is set.
+description: Expose this runner as a theia node (keyless shell + ping/speed by default, more on request) over the overlay, reachable by membership across GitHub's NAT, or self-rooted with a capability link when no invite is set.
 
 inputs:
-  authkey:
+  invite:
     description: >
       A one-time invite for this runner (`swoosh invite add <label>` on your machine), passed as a GitHub
       secret. The derived form carries the device seed: the runner adopts it to become that identity AND to
@@ -45,7 +45,7 @@ inputs:
       parses). When set, the step runs serve in the foreground and lives exactly as long as the node: at
       the deadline, or on a remote `swoosh stop`, the node ends gracefully and the step passes; a real
       serve failure fails the step with the redacted stderr. OMIT to return as soon as the node is up: the
-      node keeps serving until the job ends and the workflow advances. Refused without an authkey: a
+      node keeps serving until the job ends and the workflow advances. Refused without an invite: a
       self-rooted node is reached by a capability link that later steps must mint and publish, and a step
       held open blocks them.
     required: false
@@ -62,7 +62,7 @@ outputs:
   node-id:
     description: >
       The node's public key (`bf01...`), the address peers dial. In adopt mode the adopted device's key;
-      with no authkey, the key the runner just minted. Public, not a secret: reaching anything still needs
+      with no invite, the key the runner just minted. Public, not a secret: reaching anything still needs
       a badge or a capability link.
     value: ${{ steps.node.outputs['node-id'] }}
   services:
@@ -81,7 +81,7 @@ runs:
         SWOOSH_REF: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        # The runner needs only swoosh now: it `adopt`s an authkey or self-roots AND serves the services
+        # The runner needs only swoosh now: it `adopt`s an invite or self-roots AND serves the services
         # (`swoosh serve`), one binary, no `tightbeam` on PATH. Verify BOTH a checksum and the keyless
         # build-provenance attestation before the binary ever runs: `gh attestation verify` proves it was
         # built by theia-hq's release workflow (sigstore/OIDC), so a swapped release binary is refused.
@@ -105,7 +105,7 @@ runs:
       id: node
       shell: bash
       env:
-        SWOOSH_AUTHKEY: ${{ inputs.authkey }}
+        SWOOSH_INVITE: ${{ inputs.invite }}
         THEIA_SERVICES: ${{ inputs.services }}
         THEIA_PUBLIC: ${{ inputs.public }}
         EXPIRES: ${{ inputs.expires }}
@@ -121,31 +121,31 @@ runs:
         # or the step ending over a backgrounded serve), so no arrival record survives the step. A
         # backgrounded serve keeps its open fd; the path is unlinked, not left behind.
         trap 'rm -f "$RUNNER_TEMP/expose.err"' EXIT
-        # Two modes, chosen by the authkey. SET: adopt it over stdin, so a derived invite's seed never
+        # Two modes, chosen by the invite. SET: adopt it over stdin, so a derived invite's seed never
         # enters argv (`ps` sees only `adopt -` and the flag) and never touches disk; the runner delivers
         # inputs as env (unavoidable), and `adopt` is the one child that holds it, only long enough to
         # consume it. Unset it the moment adopt returns, before any other process spawns (notably `swoosh
         # serve`), so children never inherit it. EMPTY: self-rooted, no adopt: the node mints its own key
         # and gates on it.
         SELF_ROOTED=false
-        if [ -n "$SWOOSH_AUTHKEY" ]; then
+        if [ -n "$SWOOSH_INVITE" ]; then
           # --force: the operator re-provisions a persistent runner per job by minting a fresh invite, so
           # the carried badge differs from the one the last job stored in the default home, and adopt's
           # guard would refuse the replacement. That guard exists to stop a SILENT swap of the live
           # credential (a replayed old or revoked token), not the operator's deliberate re-provisioning;
           # --force is that acknowledgement. A rerun of the same invite is byte-identical and needs no
           # flag; --force also waives the differing-signet refusal, for the same operator-chosen reason.
-          printf '%s' "$SWOOSH_AUTHKEY" | swoosh adopt - --force
-          unset SWOOSH_AUTHKEY
+          printf '%s' "$SWOOSH_INVITE" | swoosh adopt - --force
+          unset SWOOSH_INVITE
         else
           SELF_ROOTED=true
-          echo "::warning::no authkey: self-rooted mode; this node trusts only its own root, so your devices will not reach it. Set the authkey secret to adopt."
+          echo "::warning::no invite: self-rooted mode; this node trusts only its own root, so your devices will not reach it. Set the invite secret to adopt."
           if [ -n "$EXPIRES" ]; then
             # A self-rooted node's only reach is a capability link minted and published by a LATER step.
             # `expires` keeps THIS step alive until the node is gone, so those steps never run; teach the
             # working shape instead of holding a node nobody can reach. Checked before the home is set up so
             # a refused run does not touch the job's environment.
-            echo "::error::expires cannot be combined with an empty authkey: a self-rooted node is reached by a capability link that later steps must mint and publish, and expires holds this step until the node is gone. Run without expires, mint and publish in later steps, then keep the job alive with a final step."
+            echo "::error::expires cannot be combined with an empty invite: a self-rooted node is reached by a capability link that later steps must mint and publish, and expires holds this step until the node is gone. Run without expires, mint and publish in later steps, then keep the job alive with a final step."
             exit 1
           fi
           # A fresh per-job home. `serve` persists its identity in the node home, and on a self-hosted
@@ -243,7 +243,7 @@ runs:
         fi
         swoosh serve "${SERVE_ARGS[@]}" 2> "$RUNNER_TEMP/expose.err" &
         pid=$!
-        # Fail fast: give serve a moment, then verify it is alive, so a dead node (bad authkey, gate, port)
+        # Fail fast: give serve a moment, then verify it is alive, so a dead node (bad invite, gate, port)
         # surfaces HERE with the key redacted, not silently later. Without expires the step ends after the
         # check and the backgrounded serve persists for the rest of the job.
         sleep 2
@@ -277,9 +277,9 @@ runs:
         fi
         if [ "$RUNNER_ENVIRONMENT" = "self-hosted" ]; then
           # A persistent runner that leaves a node behind: on an adopted node `expires` bounds it. A
-          # self-rooted node refuses expires, so its warning names the authkey route instead.
+          # self-rooted node refuses expires, so its warning names the invite route instead.
           if [ "$SELF_ROOTED" = true ]; then
-            echo "::warning::no expires deadline is set, and self-rooted mode refuses expires: this node serves until the job ends. Set the authkey secret to adopt if you need expires to bound a node."
+            echo "::warning::no expires deadline is set, and self-rooted mode refuses expires: this node serves until the job ends. Set the invite secret to adopt if you need expires to bound a node."
           else
             echo "::warning::no expires deadline is set: this node serves until the job ends; set expires (e.g. expires: 30m) to bound it."
           fi

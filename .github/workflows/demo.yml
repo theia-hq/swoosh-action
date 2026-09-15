@@ -2,9 +2,9 @@ name: swoosh-ssh-demo
 # Manually-triggered demo: bring this runner up as a node reachable over the theia overlay.
 #
 # Set on this repo first (on your laptop):
-#   swoosh mint ci-runner                    mints an authkey and records the contact me/ci-runner
-#   gh secret set THEIA_AUTHKEY              paste the authkey
-# The runner adopts the authkey: it becomes that device and trusts your signet, so its family gate
+#   swoosh invite add ci-runner              prints an invite and records the contact me/ci-runner
+#   gh secret set THEIA_INVITE               paste the invite
+# The runner adopts the invite: it becomes that device and trusts your signet, so its family gate
 # admits your devices and delegates by membership (no per-key allowlist).
 #
 # Then:  gh workflow run demo.yml
@@ -18,5 +18,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./
         with:
-          authkey: ${{ secrets.THEIA_AUTHKEY }}
+          invite: ${{ secrets.THEIA_INVITE }}
           expires: "10m"
