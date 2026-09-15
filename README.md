@@ -1,8 +1,8 @@
 # swoosh-action
 
 A GitHub Action that turns a CI runner into a node you reach by its public key: across GitHub's NAT, with
-no port-forward and no SSH keys to manage. Mint the runner's name on your laptop before the runner exists,
-then dial `me/ci-runner` while the job runs.
+no port-forward and no SSH keys to manage. Create the runner's invite on your machine before the runner
+exists, then dial `me/ci-runner` while the job runs.
 
 ## Quickstart
 
@@ -26,8 +26,8 @@ jobs:
 Save it as `.github/workflows/swoosh.yml`, push it to your default branch, then run it from the Actions
 tab or with `gh workflow run swoosh.yml`.
 
-`authkey` is optional. Set it to the value `swoosh mint` printed: the runner adopts it to become the
-device identity [`swoosh mint`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/mint.md)
+`authkey` is optional. Set it to the invite `swoosh invite add` printed: the runner adopts it to become
+the device identity [`swoosh invite add`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/invite.md)
 derived and to trust the root key that minted it (your signet), so its gate admits your devices and the
 delegates you grant. The authkey carries a device seed: keep it in a repository secret, never in the
 workflow file. The action pipes the secret into `adopt` on stdin, so it never enters the command line or a
@@ -57,13 +57,13 @@ refused without an `authkey` (a self-rooted node is reached by a link later step
 
 ## Prerequisites
 
-1. A laptop with the [`swoosh`](https://github.com/theia-hq/swoosh) client installed. Get a binary from
+1. A machine with the [`swoosh`](https://github.com/theia-hq/swoosh) client installed. Get a binary from
    the [releases](https://github.com/theia-hq/swoosh/releases) page. The client mints your signet (your
    root key) on first use, and
    [`swoosh identity`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/identity.md)
    prints its key.
-2. The authkey: run `swoosh mint ci-runner` on that laptop. It prints the authkey and records the contact
-   `me/ci-runner`, the name you dial later. A [self-rooted node](#self-rooted-nodes) skips this.
+2. The authkey: run `swoosh invite add ci-runner` on that machine. It prints a one-time invite and records
+   the contact `me/ci-runner`, the name you dial later. A [self-rooted node](#self-rooted-nodes) skips this.
 3. A Linux or macOS runner and a GitHub repository you can set secrets on. With the [`gh`
    CLI](https://cli.github.com) installed, run `gh secret set THEIA_AUTHKEY` and paste the authkey; or add
    it in the repository under Settings > Secrets and variables > Actions. The workflow reads it as
@@ -91,9 +91,10 @@ full `name=target` grammar.
 ## Reach a service the job runs
 
 The job can serve a local port (a preview build, a dashboard): set `services: "web=127.0.0.1:8080"`,
-which replaces the default set, and keep the job open for the review window. On your laptop,
-`swoosh grant issue web --expires 4h` mints a capability link and `swoosh contact ls me` prints the
-runner's full key; hand reviewers this line:
+which replaces the default set, and `expires: 4h` to hold the job open for the review window. On the
+machine that holds your signet, `swoosh grant issue web --expires 4h` mints a capability link and
+`swoosh contact ls me` prints the runner's full key; hand reviewers this line (they need the `swoosh`
+client installed):
 
 ```sh
 swoosh forward <node-key> --service web --to 8080 --present sheer:<link>
@@ -142,7 +143,7 @@ Omit `expires` and the step returns once the node is up, while the node keeps se
 The action checks the node is alive before it reports it reachable, so a node that died at startup fails
 the step with the redacted error. On a self-hosted runner, the action warns that no deadline is set.
 
-From your laptop, end the node early:
+From your machine, end the node early:
 
 ```sh
 swoosh stop --at me/ci-runner
@@ -163,7 +164,7 @@ Without `expires` the action reports the node reachable once serve is up, and th
 the job ends. With `expires` the step is the node running, so connect while the step runs. Over iroh a
 session often starts relayed and hole-punches to a direct path, so a `swoosh ping` run can read
 `(upgraded from relayed)` mid-run, and `swoosh status me/ci-runner` names the path you are on. From your
-laptop, run `swoosh ping me/ci-runner` to confirm reachability before a later step depends on the node.
+machine, run `swoosh ping me/ci-runner` to confirm reachability before a later step depends on the node.
 
 For the end-to-end deployment, the [`theia-hq/qat`](https://github.com/theia-hq/qat) template runs this
 action on demand to give a developer a keyless shell on a runner.
@@ -224,17 +225,17 @@ the job alive with a final step.
 
 ## Rotate the authkey
 
-Mint a fresh authkey per use or per repo, then update the secret:
+Create a fresh invite per use or per repo, then update the secret:
 
 ```sh
-swoosh mint ci-runner
+swoosh invite add ci-runner
 gh secret set THEIA_AUTHKEY
 ```
 
 The authkey carries the device's derived seed and trust for your signet, never your signet key, so a
 leaked authkey compromises that one runner and not your identity. It stays adoptable until the membership
-badge it carries expires, so mint right before you deploy. `swoosh mint ci-runner --expires 30d` shortens
-the window; the default is 90 days.
+badge it carries expires, so create it right before you deploy. `swoosh invite add ci-runner --expires 30d`
+shortens the window; the default is 90 days.
 
 ## Choose the swoosh version
 
@@ -291,24 +292,24 @@ A job's `timeout-minutes` is a hard cap; the action's own deadline is `expires`.
 
 ## Troubleshooting
 
-### Error: not an authkey
+### Error: not an invite
 
 ```text
-Error: not an authkey (expected the `authkey:` prefix)
+Error: not an invite (expected the `invite:` prefix)
 ```
 
-The secret is set but does not hold the value `swoosh mint` printed: a truncated paste, a capability link
-(`sheer:...`), or a path. Set the repository secret to the whole minted value, under the name the workflow
-references:
+The secret is set but does not hold the value `swoosh invite add` printed: a truncated paste, a capability
+link (`sheer:...`), or a path. Set the repository secret to the whole printed invite, under the name the
+workflow references:
 
 ```sh
 gh secret set THEIA_AUTHKEY
 ```
 
 An empty secret is not this error: the node self-roots with a warning. The other parse failures
-(`malformed authkey ...`, `invalid base32 in authkey seed`, `authkey seed is not 32 bytes`, `invalid signet
-in authkey`) have the same fix. Secrets are not passed to workflows triggered by pull requests from forks,
-so a fork run self-roots with the warning instead of adopting your signet.
+(`malformed invite ...`, `invalid base32 in the invite seed`, `invite seed is not 32 bytes`, `invalid
+signet in invite`) have the same fix. Secrets are not passed to workflows triggered by pull requests from
+forks, so a fork run self-roots with the warning instead of adopting your signet.
 
 ### The node exited early
 
