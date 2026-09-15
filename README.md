@@ -128,7 +128,7 @@ like `--public-unsafe`. The node enforces `fetch`'s origin scope: an origin-scop
 `fetch:` is refused at startup as an open relay. A public `ping` or `speed` is metered by the node: a
 per-caller run interval, one transfer at a time, and byte and wall-clock caps.
 
-**The honest limit.** A public service is reachable by anyone who knows the node's key. There is no link
+**A public service is reachable by anyone who knows the node's key.** There is no link
 to expire and no badge to revoke; `expires` or the end of the job is the bound. The key is public by
 design and grants nothing for the gated services.
 
