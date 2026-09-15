@@ -4,6 +4,8 @@ A GitHub Action that turns a CI runner into a node you reach by its public key: 
 no port-forward and no SSH keys to manage. Create the runner's invite on your machine before the runner
 exists, then dial `me/ci-runner` while the job runs.
 
+This page describes the default branch; the released docs are at the newest tag.
+
 ## Quickstart
 
 This workflow serves the default set (a keyless shell, `ping`, and `speed`) and holds the runner open for
