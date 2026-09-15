@@ -11,11 +11,12 @@ description: Expose this runner as a theia node (keyless shell + ping/speed by d
 inputs:
   authkey:
     description: >
-      A one-time invite minted on your laptop (`swoosh invite add <label> --for <device-key>`). The runner ADOPTS it to become that
-      derived device identity AND to trust your signet, so your family gate admits you by membership, with
-      no per-key allowlist. A SECRET (it carries the device seed): pass a GitHub secret. OMIT for a
-      self-rooted node: the runner mints its own key, trusts only that key, and is reached by a capability
-      link a later step mints and publishes.
+      A one-time invite for this runner (`swoosh invite add <label>` on your machine), passed as a GitHub
+      secret. The derived form carries the device seed: the runner adopts it to become that identity AND to
+      trust your signet, so the gate admits your devices by membership, with no per-key allowlist. A bound
+      invite (`swoosh invite add <label> --for <key>`) carries no seed and keeps the runner's identity.
+      OMIT for a self-rooted node: the runner mints its own key, trusts only that key, and is reached by a
+      capability link a later step mints and publishes.
     required: false
     default: ""
   services:
@@ -120,14 +121,21 @@ runs:
         # or the step ending over a backgrounded serve), so no arrival record survives the step. A
         # backgrounded serve keeps its open fd; the path is unlinked, not left behind.
         trap 'rm -f "$RUNNER_TEMP/expose.err"' EXIT
-        # Two modes, chosen by the authkey. SET: adopt it over stdin, so the seed never enters argv (`ps`
-        # sees only `adopt -`) and never touches disk; the runner delivers inputs as env (unavoidable), and
-        # `adopt` is the one child that holds it, only long enough to consume it. Unset it the moment adopt
-        # returns, before any other process spawns (notably `swoosh serve`), so children never inherit it.
-        # EMPTY: self-rooted, no adopt: the node mints its own key and gates on it.
+        # Two modes, chosen by the authkey. SET: adopt it over stdin, so a derived invite's seed never
+        # enters argv (`ps` sees only `adopt -` and the flag) and never touches disk; the runner delivers
+        # inputs as env (unavoidable), and `adopt` is the one child that holds it, only long enough to
+        # consume it. Unset it the moment adopt returns, before any other process spawns (notably `swoosh
+        # serve`), so children never inherit it. EMPTY: self-rooted, no adopt: the node mints its own key
+        # and gates on it.
         SELF_ROOTED=false
         if [ -n "$SWOOSH_AUTHKEY" ]; then
-          printf '%s' "$SWOOSH_AUTHKEY" | swoosh adopt -
+          # --force: the operator re-provisions a persistent runner per job by minting a fresh invite, so
+          # the carried badge differs from the one the last job stored in the default home, and adopt's
+          # guard would refuse the replacement. That guard exists to stop a SILENT swap of the live
+          # credential (a replayed old or revoked token), not the operator's deliberate re-provisioning;
+          # --force is that acknowledgement. A rerun of the same invite is byte-identical and needs no
+          # flag; --force also waives the differing-signet refusal, for the same operator-chosen reason.
+          printf '%s' "$SWOOSH_AUTHKEY" | swoosh adopt - --force
           unset SWOOSH_AUTHKEY
         else
           SELF_ROOTED=true
