@@ -55,7 +55,7 @@ refused without an `authkey` (a self-rooted node is reached by a link later step
 [Hold the job open](#hold-the-job-open) has the details.
 
 `version` is optional and defaults to `latest`, the newest swoosh release. Set a release tag such as
-`v0.8.0` to pin it. [Choose the swoosh version](#choose-the-swoosh-version) covers the install check.
+`v0.9.0` to pin it. [Choose the swoosh version](#choose-the-swoosh-version) covers the install check.
 
 ## Prerequisites
 
@@ -245,7 +245,7 @@ shortens the window; the default is 90 days.
 - uses: theia-hq/swoosh-action@v2
   with:
     authkey: ${{ secrets.THEIA_AUTHKEY }}
-    version: v0.8.0
+    version: v0.9.0
 ```
 
 `latest` installs the newest release, so what runs changes over time; a release tag keeps runs
