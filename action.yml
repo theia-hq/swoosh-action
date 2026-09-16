@@ -49,6 +49,21 @@ inputs:
       held open blocks them.
     required: false
     default: ""
+  relay:
+    description: >
+      the relay peers reach this runner through (`swoosh serve --relay`), such as
+      `https://relay.example`. A per-NODE setting: it travels in the record this runner publishes. Empty
+      by default: n0's public relays carry the fallback.
+    required: false
+    default: ""
+  resolver:
+    description: >
+      the resolver's `/pkarr` URL this node publishes its address record to and looks peers up through
+      (`swoosh serve --resolver`), such as `https://dns.example/pkarr`. A FLEET-wide setting: your
+      machines find this runner only if they resolve through the same one. Empty by default: n0's public
+      discovery.
+    required: false
+    default: ""
   version:
     description: >
       the swoosh release to install: `latest` (the newest release) or a pinned release tag (e.g. `v0.9.0`).
@@ -125,6 +140,8 @@ runs:
         # keeps peer-influenced activity out of that echo and refuses a RUST_LOG=debug inherited from the
         # workflow, so the echo cannot widen.
         RUST_LOG: error
+        RELAY: ${{ inputs.relay }}
+        RESOLVER: ${{ inputs.resolver }}
       run: |
         set -euo pipefail
         # expose.err is per-INVOCATION, not per-job: RUNNER_TEMP persists on a self-hosted runner, and the
@@ -239,6 +256,17 @@ runs:
           # Verbatim passthrough, one argv: serve splits on commas and proves every name at startup, so
           # the list the operator wrote is the list the node rules on, with nothing tokenized twice.
           SERVE_ARGS+=(--public "$THEIA_PUBLIC")
+        fi
+        # The two reach inputs, passed only when set: an empty one means n0's, which is serve's own
+        # default and takes no flag. Each names itself in the log, so a reader is never left guessing
+        # whether this node reached through n0's servers or the operator's own.
+        if [ -n "$RELAY" ]; then
+          SERVE_ARGS+=(--relay "$RELAY")
+          echo "::notice::relay: $RELAY (the relay peers reach this runner through)"
+        fi
+        if [ -n "$RESOLVER" ]; then
+          SERVE_ARGS+=(--resolver "$RESOLVER")
+          echo "::notice::resolver: $RESOLVER (address records published here; your machines must resolve through the same one)"
         fi
         if [ -n "$EXPIRES" ]; then
           # expires: serve in the FOREGROUND, so this step lives exactly as long as the node. `--expires`
