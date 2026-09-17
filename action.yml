@@ -62,8 +62,9 @@ outputs:
   node-id:
     description: >
       The node's public key (`bf01...`), the address peers dial. In adopt mode the adopted device's key;
-      with no invite, the key the runner just minted. Public, not a secret: reaching anything still needs
-      a badge or a capability link.
+      with no invite, the key the runner just minted. Public, not a secret: reaching a gated service still
+      needs a badge or a capability link. A service named in `public` is the exception: this key is all
+      anyone needs to reach it.
     value: ${{ steps.node.outputs['node-id'] }}
   services:
     description: >
@@ -90,6 +91,14 @@ runs:
         os=$(uname -s | tr '[:upper:]' '[:lower:]'); case "$os" in darwin) os=macos ;; esac
         arch=$(uname -m); case "$arch" in amd64|x86_64) arch=x86_64 ;; arm64|aarch64) arch=aarch64 ;; esac
         asset="swoosh-$arch-$os"
+        # `version` becomes a URL path segment, and curl normalizes `..`, so an unvalidated value can walk
+        # out of theia-hq/swoosh and point BOTH the binary and its checksum at a foreign repository. Parse
+        # it first: `latest`, or a release tag (`v` then a digit, then tag characters only). No slashes, no
+        # dots that start a segment, nothing that can leave the release path.
+        if [[ ! "$SWOOSH_REF" =~ ^(latest|v[0-9][0-9A-Za-z.+-]*)$ ]]; then
+          echo "::error::version: '$SWOOSH_REF' is not a release: use 'latest' or a release tag (e.g. v0.9.1)."
+          exit 1
+        fi
         if [ "$SWOOSH_REF" = "latest" ]; then
           base="https://github.com/theia-hq/swoosh/releases/latest/download"
         else
@@ -164,59 +173,47 @@ runs:
         # `serve` binds, so both outputs are settled while the identity is.
         identity_out=$(swoosh identity)
         NODE_ID=$(printf '%s\n' "$identity_out" | sed -n '1p')
+        # A newline in `services` is refused HERE, for two reasons that both bite silently: `read` stops
+        # at the first newline, so a block-scalar list would serve line one and drop the rest while the
+        # `services` output still reported all of them; and the value is written to $GITHUB_OUTPUT, where
+        # an embedded newline is another `key=value` line (a second `node-id=` a later step would trust).
+        case "$THEIA_SERVICES" in
+          *$'\n'*)
+            echo "::error::services: the list must be one line; a newline is not allowed."
+            exit 1
+            ;;
+        esac
         read -ra SERVICES <<< "$THEIA_SERVICES"
-        # The action-side half of the eligible-set guard: the exclusion lives in the input parse, so
-        # manual `serve --public` semantics stay untouched. Split on commas only; no trimming, so a token
-        # is compared exactly as typed (` speed` is not `speed`). A public name must be ping, speed, or
-        # fetch AND bound to its matching target in services (`ping=ping:`, `speed=speed:`, or
-        # `fetch=fetch:<origin>`), so an alias (`fetch=127.0.0.1:8080`) or a forward cannot ride a built-in
-        # name. The node's own bind proof still backstops the target level.
-        PUBLIC_RULE="The eligible set is exactly ping=ping:, speed=speed:, and fetch=fetch:<origin>; forwards, echo, raw streams, and --public-unsafe are never eligible."
-        if [ -n "$THEIA_PUBLIC" ]; then
-          # A block-scalar list can hide names past the first line; refuse it here, not at serve.
-          case "$THEIA_PUBLIC" in
-            *$'\n'*)
-              echo "::error::public: the list must be one line; a newline is not allowed."
-              exit 1
-              ;;
-          esac
-          IFS=',' read -ra PUBLIC_NAMES <<< "$THEIA_PUBLIC"
-          for name in "${PUBLIC_NAMES[@]}"; do
-            case "$name" in
-              ping|speed|fetch) ;;
-              *)
-                echo "::error::public: '$name' is not eligible. $PUBLIC_RULE"
-                exit 1
-                ;;
-            esac
-            entry= target=
-            for candidate in "${SERVICES[@]}"; do
-              case "$candidate" in
-                "$name"=*)
-                  entry="$candidate"
-                  target="${candidate#*=}"
-                  break
-                  ;;
-              esac
-            done
-            if [ -z "$entry" ]; then
-              echo "::error::public: '$name' is not served: no '$name=<target>' entry in services. $PUBLIC_RULE"
-              exit 1
-            fi
-            case "$target" in
-              "$name":*) ;;
-              *)
-                echo "::error::public: '$name' is bound to '$target', not to '$name:'. $PUBLIC_RULE"
-                exit 1
-                ;;
-            esac
-          done
-        fi
+        # Prove the public list BEFORE anything binds: the guard refuses a name that is not eligible, is
+        # not served, or is not bound to its matching built-in target (`ping=ping:`, `speed=speed:`,
+        # `fetch=fetch:<origin>`), so an alias or a forward cannot ride a built-in name. It lives in its
+        # own script for one reason: a decision this consequential gets a test, and a `run:` block cannot
+        # be called (scripts/test-public-guard.rb runs its matrix in CI). It takes the service entries as
+        # the SAME words serve receives below, so the guard and the bind read one list.
+        bash "$GITHUB_ACTION_PATH/scripts/public-guard.sh" "$THEIA_PUBLIC" "${SERVICES[@]+"${SERVICES[@]}"}"
+        # Both outputs, written through the multi-line form with a delimiter drawn fresh from urandom.
+        # $GITHUB_OUTPUT is line-oriented: a value carrying a newline appends its own `key=value` lines,
+        # and a later duplicate key wins, so an unfenced `services` could publish an attacker's key as
+        # this node's `node-id` for every step that reads it. An unguessable delimiter means no input can
+        # close the block early. `node-id` is one line by construction (`sed -n 1p`), so it stays plain.
+        emit_outputs() {
+          local delimiter
+          delimiter="ghaout_$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+          {
+            echo "node-id=$NODE_ID"
+            echo "services<<$delimiter"
+            echo "$THEIA_SERVICES"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+        }
         # Serve the requested services behind the node's gate (the adopted signet, or the node's own key
         # in self-rooted mode): no per-key allowlist. --quiet: the readiness banner (node id, services,
         # gate) is NEVER printed, so it cannot leak into the (public) log; serve stderr is held in a file
         # so a failure echoes with every `bf01...` redacted.
-        SERVE_ARGS=("${SERVICES[@]}" --quiet)
+        # Flags first, then `--`, then the services as positionals: everything after `--` is a service
+        # entry, so a services token that begins with a dash cannot reach serve as a FLAG (a smuggled
+        # `--public-unsafe raw` would otherwise open a raw stream the public guard never saw).
+        SERVE_ARGS=(--quiet)
         if [ -n "$THEIA_PUBLIC" ]; then
           # Verbatim passthrough, one argv: every token was proven above, and serve splits on commas.
           SERVE_ARGS+=(--public "$THEIA_PUBLIC")
@@ -229,19 +226,16 @@ runs:
           # clean exit the node did come up (only a bound node can be stopped), so settle both outputs
           # before the step ends and never emit them for a node that never served.
           code=0
-          swoosh serve "${SERVE_ARGS[@]}" --expires "$EXPIRES" 2> "$RUNNER_TEMP/expose.err" || code=$?
+          swoosh serve "${SERVE_ARGS[@]}" --expires "$EXPIRES" -- "${SERVICES[@]+"${SERVICES[@]}"}" 2> "$RUNNER_TEMP/expose.err" || code=$?
           if [ "$code" -ne 0 ]; then
             echo "::error::swoosh serve exited $code." >&2
             sed -E 's/bf01[a-z2-7]+/bf01<redacted>/g' "$RUNNER_TEMP/expose.err" >&2 || true
             exit "$code"
           fi
-          {
-            echo "node-id=$NODE_ID"
-            echo "services=$THEIA_SERVICES"
-          } >> "$GITHUB_OUTPUT"
+          emit_outputs
           exit 0
         fi
-        swoosh serve "${SERVE_ARGS[@]}" 2> "$RUNNER_TEMP/expose.err" &
+        swoosh serve "${SERVE_ARGS[@]}" -- "${SERVICES[@]+"${SERVICES[@]}"}" 2> "$RUNNER_TEMP/expose.err" &
         pid=$!
         # Fail fast: give serve a moment, then verify it is alive, so a dead node (bad invite, gate, port)
         # surfaces HERE with the key redacted, not silently later. Without expires the step ends after the
@@ -264,10 +258,7 @@ runs:
         # The node is up: settle both action outputs (the full public key and the requested service list)
         # for a later step to compose instructions or a PR comment. Outputs are public: no capability link
         # is minted or emitted here, ever.
-        {
-          echo "node-id=$NODE_ID"
-          echo "services=$THEIA_SERVICES"
-        } >> "$GITHUB_OUTPUT"
+        emit_outputs
         if [ "$SELF_ROOTED" = true ]; then
           # No members to name: point at the later mint-and-publish step and this step's node-id output,
           # never at a `me/<label>` dialogue that needs a signet to exist.
@@ -275,12 +266,18 @@ runs:
         else
           echo "node reachable over the overlay by key. from your laptop: swoosh ssh me/<label> (or ping/speed/fetch)."
         fi
-        if [ "$RUNNER_ENVIRONMENT" = "self-hosted" ]; then
+        if [ "${RUNNER_ENVIRONMENT:-}" = "self-hosted" ]; then
           # A persistent runner that leaves a node behind: on an adopted node `expires` bounds it. A
           # self-rooted node refuses expires, so its warning names the invite route instead.
           if [ "$SELF_ROOTED" = true ]; then
             echo "::warning::no expires deadline is set, and self-rooted mode refuses expires: this node serves until the job ends. Set the invite secret to adopt if you need expires to bound a node."
           else
             echo "::warning::no expires deadline is set: this node serves until the job ends; set expires (e.g. expires: 30m) to bound it."
+          fi
+          if [ -n "$THEIA_PUBLIC" ]; then
+            # A public service has no link to expire and no badge to revoke, so the deadline IS the bound.
+            # Without one, on a runner that persists between jobs, the open endpoint lives as long as the
+            # node does; name that consequence where the node can outlive the job window.
+            echo "::warning::public services ($THEIA_PUBLIC) are open to anyone who knows this node's key, and no expires deadline bounds them: they stay open until the job ends."
           fi
         fi

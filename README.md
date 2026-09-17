@@ -197,8 +197,15 @@ step an `id` (here `node`), then read them in a later step:
         uses: theia-hq/swoosh-action@v2
         with:
           invite: ${{ secrets.THEIA_INVITE }}
-      - run: echo "node ${{ steps.node.outputs['node-id'] }} serves ${{ steps.node.outputs.services }}"
+      - run: echo "node $NODE_ID serves $SERVICES"
+        env:
+          NODE_ID: ${{ steps.node.outputs['node-id'] }}
+          SERVICES: ${{ steps.node.outputs.services }}
 ```
+
+Read an output through `env:`, as above, rather than substituting `${{ ... }}` into the script text: an
+expression is pasted into the shell before it runs, so a value carrying a quote or a newline becomes part
+of the command. That holds for any expression, not just these two.
 
 - `node-id`: the node's public key (`bf01...`), the address peers dial. In adopt mode it is the adopted
   device's key; self-rooted, the key the runner just minted.
@@ -256,7 +263,9 @@ asset is refused.
 ## The node id is a public key, and the log is public
 
 The node id is a public key, not a secret: knowing it grants nothing without a badge from your signet (or
-a capability link when the node is self-rooted), and every service stays behind the gate. The action still
+a capability link when the node is self-rooted), and every gated service stays behind the gate. The
+exception is a service you name in [`public`](#open-a-service-to-anyone): the key is all anyone needs to
+reach that one, so publish it only if you meant to. The action still
 serves with `--quiet`, because a CI log is a public record: the readiness banner (the full node key, the
 service list, the gate) never prints, and an accidental `cat` cannot republish the node's address. On a
 failure the action rewrites every `bf01...` in the node's stderr to `bf01<redacted>` before echoing it.
