@@ -6,7 +6,9 @@
 # Two drifts this catches:
 #   1. a `with:` key in a README yaml block (or an examples/*.yml file, if one is ever added) that
 #      action.yml does not declare;
-#   2. a `uses: theia-hq/swoosh-action@<ref>` naming a tag or branch that does not exist upstream.
+#   2. a `uses: theia-hq/swoosh-action@<ref>` naming a tag or branch that does not exist upstream;
+#   3. a `${{ ... }}` expression substituted into a `run:` script, which a caller would copy into their
+#      own workflow (the value is pasted into the shell before it runs; `env:` is the way to read one).
 #
 # Source of truth for inputs: the `inputs:` keys in action.yml.
 # Snippets checked: every ```yaml fenced block in README.md, plus examples/*.yml when present
@@ -130,6 +132,32 @@ def check_lines(snippet, inputs, refs, findings)
   end
 end
 
+# A `${{ ... }}` expression inside a `run:` script is pasted into the shell BEFORE it runs, so a value
+# carrying a quote or a newline becomes part of the command. The action's own outputs are attacker-shaped
+# in exactly that way (a workflow can feed them), and a published example is copied verbatim by callers,
+# so no snippet here may teach it: read the value through `env:` and reference the variable instead.
+def check_run_expressions(snippet, findings)
+  block_indent = nil
+  snippet.text.each_line.with_index(1) do |line, number|
+    location = snippet.line_offset + number
+    if block_indent
+      if line.strip.empty? || line[/\A\s*/].length > block_indent
+        findings << "#{snippet.path}:#{location}: `${{ ... }}` inside a run: script; pass it through env: and reference the variable" if line.include?("${{")
+        next
+      end
+      block_indent = nil
+    end
+    next unless (run = line.match(/\A(\s*)(?:-\s+)?run:\s*(.*)$/))
+
+    rest = run[2].strip
+    if rest.start_with?("|", ">")
+      block_indent = run[1].length
+    elsif rest.include?("${{")
+      findings << "#{snippet.path}:#{location}: `${{ ... }}` inside a run: script; pass it through env: and reference the variable"
+    end
+  end
+end
+
 def check_snippet(snippet, inputs, refs, findings)
   document = begin
     Psych.parse(snippet.text)
@@ -168,7 +196,10 @@ def main
   refs = Hash.new { |hash, ref| hash[ref] = [] }
   findings = []
 
-  snippets.each { |snippet| check_snippet(snippet, inputs, refs, findings) }
+  snippets.each do |snippet|
+    check_snippet(snippet, inputs, refs, findings)
+    check_run_expressions(snippet, findings)
+  end
 
   refs.keys.sort.each do |ref|
     next if ref_exists?(ref)
