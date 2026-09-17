@@ -42,11 +42,8 @@ produce it.
 
 `public` is optional and empty by default: every service stays behind your gate. Set it to a
 comma-separated list of services to open to anyone, exactly as `swoosh serve --public` takes them (e.g.
-`ping,speed`). Only `ping`, `speed`, and `fetch` may be opened, and each must be bound to its matching
-built-in target in `services`: `ping=ping:`, `speed=speed:`, or `fetch=fetch:<origin>`. Any other shape,
-including a forward, `echo`, a raw stream, a `--public-unsafe` shape, a name bound to another target, or a
-name you do not serve, is refused before serve runs. The node enforces `fetch`'s origin scope.
-[Open a service to anyone](#open-a-service-to-anyone) has the details.
+`ping,speed`). A runner sits inside a network, and `public` means anyone on the internet can reach that
+service with no credential. [Open a service to anyone](#open-a-service-to-anyone) has the details.
 
 `expires` is optional and unset by default. Set a duration (`30m`, `2h`, `1d`, as `swoosh serve --expires`
 parses) to bound the node: the step then runs serve in the foreground and lives exactly as long as the
@@ -73,8 +70,7 @@ refused without an `invite` (a self-rooted node is reached by a link later steps
 
 ## Serve more than a shell
 
-Every entry is `name=target`, space-separated; a bare `ping` or `ping:` is refused. Replace the default
-set to add the services you need:
+Every entry is `name=target`, space-separated. Replace the default set to add the services you need:
 
 ```yaml
 - uses: theia-hq/swoosh-action@v2
@@ -119,19 +115,18 @@ Set `public` to open named services to anyone, unauthenticated:
     public: ping,speed,fetch
 ```
 
-Only the names you list are opened, and each must be a service you serve. The eligible set is exactly
-`ping=ping:`, `speed=speed:`, and `fetch=fetch:<origin>`: the name must be bound to its matching built-in
-target in `services`, so a public `fetch` requires an entry like `fetch=fetch:https://news.example`. Any
-other shape is refused before `serve` runs, including a forward, `echo`, a raw stream
-(`file:`/`fifo:`/`stdin:`), a name bound to another target, a name you do not serve, and anything shaped
-like `--public-unsafe`. The node enforces `fetch`'s origin scope: an origin-scoped fetch opens, and a bare
-`fetch:` is refused at startup as an open relay. A public `ping` or `speed` is metered by the node: a
-per-caller run interval, one transfer at a time, and byte and wall-clock caps.
+A runner sits inside a network. `public` means anyone on the internet can reach that service with no
+credential, and the node opens anything it considers safe to open, including a port forward into the
+network the job runs in. The action does not narrow the list: it hands it to `swoosh serve --public`
+exactly as you wrote it, and the node proves every name at startup, before it announces anything, and
+refuses what has no safe public form. Name only what you meant.
 
 **A public service is reachable by anyone who knows the node's key.** There is no link
 to expire and no badge to revoke; `expires` or the end of the job is the bound. The key is public by
 design and grants nothing for the gated services.
 
+[`swoosh serve`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/serve.md) has what
+each service opens to a stranger and what `--public` refuses;
 [Public service](https://github.com/theia-hq/swoosh/blob/main/docs/use-cases/public-service.md) covers
 `--public` on a node you run yourself.
 
@@ -163,10 +158,8 @@ swoosh speed me/ci-runner    # throughput
 ```
 
 Without `expires` the action reports the node reachable once serve is up, and the node keeps serving until
-the job ends. With `expires` the step is the node running, so connect while the step runs. Over iroh a
-session often starts relayed and hole-punches to a direct path, so a `swoosh ping` run can read
-`(upgraded from relayed)` mid-run, and `swoosh status me/ci-runner` names the path you are on. From your
-machine, run `swoosh ping me/ci-runner` to confirm reachability before a later step depends on the node.
+the job ends. With `expires` the step is the node running, so connect while the step runs. Run
+`swoosh ping me/ci-runner` to confirm reachability before a later step depends on the node.
 
 For the end-to-end deployment, the [`theia-hq/qat`](https://github.com/theia-hq/qat) template runs this
 action on demand to give a developer a keyless shell on a runner.
@@ -242,9 +235,10 @@ gh secret set THEIA_INVITE
 ```
 
 The invite carries the device's derived seed and trust for your signet, never your signet key, so a
-leaked invite compromises that one runner and not your identity. It stays adoptable until the membership
-badge it carries expires, so create it right before you deploy. `swoosh invite add ci-runner --expires 30d`
-shortens the window; the default is 90 days.
+leaked invite compromises that one runner and not your identity. It stays adoptable until the badge it
+carries expires, so create it right before you deploy;
+[`swoosh invite`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/invite.md) has the
+window and how to shorten it.
 
 ## Choose the swoosh version
 
@@ -317,10 +311,9 @@ workflow references:
 gh secret set THEIA_INVITE
 ```
 
-An empty secret is not this error: the node self-roots with a warning. The other parse failures
-(`malformed invite ...`, `invalid base32 in the invite seed`, `invite seed is not 32 bytes`, `invalid
-signet in invite`) have the same fix. Secrets are not passed to workflows triggered by pull requests from
-forks, so a fork run self-roots with the warning instead of adopting your signet.
+An empty secret is not this error: the node self-roots with a warning. Every other invite parse failure
+has the same fix. Secrets are not passed to workflows triggered by pull requests from forks, so a fork run
+self-roots with the warning instead of adopting your signet.
 
 ### The node exited early
 
