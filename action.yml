@@ -96,7 +96,10 @@ runs:
         # it first: `latest`, or a release tag (`v` then a digit, then tag characters only). No slashes, no
         # dots that start a segment, nothing that can leave the release path.
         if [[ ! "$SWOOSH_REF" =~ ^(latest|v[0-9][0-9A-Za-z.+-]*)$ ]]; then
-          echo "::error::version: '$SWOOSH_REF' is not a release: use 'latest' or a release tag (e.g. v0.9.1)."
+          # Echo the rejected value with its line breaks removed: the log is line-oriented, so a value
+          # carrying a newline would emit its own `::` workflow commands from inside this refusal, making
+          # the check that exists to make `version` safe the way in.
+          echo "::error::version: '$(printf '%s' "$SWOOSH_REF" | tr -d '\r\n')' is not a release: use 'latest' or a release tag (e.g. v0.9.1)."
           exit 1
         fi
         if [ "$SWOOSH_REF" = "latest" ]; then
@@ -130,6 +133,45 @@ runs:
         # or the step ending over a backgrounded serve), so no arrival record survives the step. A
         # backgrounded serve keeps its open fd; the path is unlinked, not left behind.
         trap 'rm -f "$RUNNER_TEMP/expose.err"' EXIT
+        # $GITHUB_OUTPUT and $GITHUB_ENV are line-oriented files: a value carrying a line break appends its
+        # own `key=value` lines, and a later duplicate key wins, so a step could publish an attacker's key
+        # as this node's `node-id`. Every write goes through here, inside a heredoc block closed by 16
+        # fresh urandom bytes that no input can guess, and there are no "this value cannot contain a line
+        # break" exceptions: the file format is the hazard, not the value's provenance. `local` is split
+        # from the assignment so a failed draw still trips `set -e` instead of being masked by `local`'s
+        # own exit status.
+        write_kv() {
+          local delimiter
+          delimiter="gha_$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+          {
+            printf '%s<<%s\n' "$2" "$delimiter"
+            printf '%s\n' "$3"
+            printf '%s\n' "$delimiter"
+          } >> "$1"
+        }
+        # Both outputs, settled together: a later step reads the node's key and the list it serves.
+        emit_outputs() {
+          write_kv "$GITHUB_OUTPUT" node-id "$NODE_ID"
+          write_kv "$GITHUB_OUTPUT" services "$THEIA_SERVICES"
+        }
+        # Parse the inputs BEFORE anything runs, so a refused run never adopts an invite, sets up a home, or
+        # touches the job's environment. Both rules exist because the value LEAVES this step. `services` is
+        # split by `read`, which stops at the first newline, so a block-scalar list would serve line one and
+        # silently drop the rest, and it is written to $GITHUB_OUTPUT. `expires` is echoed back verbatim by
+        # serve's own parse error, and the failure path re-emits that stderr to the public log, where a line
+        # break would forge workflow commands; the shape here is exactly what serve's parser accepts
+        # (digits, then one of s/m/h/d), so this refuses only what serve would refuse anyway, sooner and
+        # without the echo. `public` is proven by the guard below, once the list it is checked against exists.
+        case "$THEIA_SERVICES" in
+          *$'\n'*)
+            echo "::error::services: the list must be one line; a newline is not allowed."
+            exit 1
+            ;;
+        esac
+        if [ -n "$EXPIRES" ] && [[ ! "$EXPIRES" =~ ^[0-9]+[smhd]$ ]]; then
+          echo "::error::expires: '$(printf '%s' "$EXPIRES" | tr -d '\r\n')' is not a duration: use a whole number and one of s, m, h, d (e.g. 30m)."
+          exit 1
+        fi
         # Two modes, chosen by the invite. SET: adopt it over stdin, so a derived invite's seed never
         # enters argv (`ps` sees only `adopt -` and the flag) and never touches disk; the runner delivers
         # inputs as env (unavoidable), and `adopt` is the one child that holds it, only long enough to
@@ -166,23 +208,13 @@ runs:
           SWOOSH_HOME="$RUNNER_TEMP/swoosh-home"
           rm -rf -- "$SWOOSH_HOME"
           export SWOOSH_HOME
-          echo "SWOOSH_HOME=$SWOOSH_HOME" >> "$GITHUB_ENV"
+          write_kv "$GITHUB_ENV" SWOOSH_HOME "$SWOOSH_HOME"
         fi
         # `swoosh identity` prints the NodeId first (minting the key when the home has none), the full
         # public key a peer dials; in adopt mode it prints the adopted device's key. Captured before
         # `serve` binds, so both outputs are settled while the identity is.
         identity_out=$(swoosh identity)
         NODE_ID=$(printf '%s\n' "$identity_out" | sed -n '1p')
-        # A newline in `services` is refused HERE, for two reasons that both bite silently: `read` stops
-        # at the first newline, so a block-scalar list would serve line one and drop the rest while the
-        # `services` output still reported all of them; and the value is written to $GITHUB_OUTPUT, where
-        # an embedded newline is another `key=value` line (a second `node-id=` a later step would trust).
-        case "$THEIA_SERVICES" in
-          *$'\n'*)
-            echo "::error::services: the list must be one line; a newline is not allowed."
-            exit 1
-            ;;
-        esac
         read -ra SERVICES <<< "$THEIA_SERVICES"
         # Prove the public list BEFORE anything binds: the guard refuses a name that is not eligible, is
         # not served, or is not bound to its matching built-in target (`ping=ping:`, `speed=speed:`,
@@ -191,21 +223,6 @@ runs:
         # be called (scripts/test-public-guard.rb runs its matrix in CI). It takes the service entries as
         # the SAME words serve receives below, so the guard and the bind read one list.
         bash "$GITHUB_ACTION_PATH/scripts/public-guard.sh" "$THEIA_PUBLIC" "${SERVICES[@]+"${SERVICES[@]}"}"
-        # Both outputs, written through the multi-line form with a delimiter drawn fresh from urandom.
-        # $GITHUB_OUTPUT is line-oriented: a value carrying a newline appends its own `key=value` lines,
-        # and a later duplicate key wins, so an unfenced `services` could publish an attacker's key as
-        # this node's `node-id` for every step that reads it. An unguessable delimiter means no input can
-        # close the block early. `node-id` is one line by construction (`sed -n 1p`), so it stays plain.
-        emit_outputs() {
-          local delimiter
-          delimiter="ghaout_$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-          {
-            echo "node-id=$NODE_ID"
-            echo "services<<$delimiter"
-            echo "$THEIA_SERVICES"
-            echo "$delimiter"
-          } >> "$GITHUB_OUTPUT"
-        }
         # Serve the requested services behind the node's gate (the adopted signet, or the node's own key
         # in self-rooted mode): no per-key allowlist. --quiet: the readiness banner (node id, services,
         # gate) is NEVER printed, so it cannot leak into the (public) log; serve stderr is held in a file

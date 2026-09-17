@@ -26,26 +26,104 @@ shift
 
 PUBLIC_RULE="The eligible set is exactly ping=ping:, speed=speed:, and fetch=fetch:<origin>; forwards, echo, raw streams, and --public-unsafe are never eligible."
 
-# The host of a `fetch:` origin, read the way the node's allowlist reads it: scheme off, path/query off,
-# port off, IPv6 brackets off, lowercased. Userinfo never reaches here (it is refused above), so an `@`
-# cannot move which side of the string is the host.
+# The host of a `fetch:` origin, as the node's URL parser would read it: scheme off, path and query off,
+# port off, brackets KEPT so an IPv6 literal stays recognizable. Userinfo never reaches here (it is refused
+# first), so an `@` cannot move which side of the string is the host.
 origin_host() {
   local host="${1#*://}"
   host="${host%%[/?#]*}"
   case "$host" in
+    "["*) host="${host%%]*}]" ;;
+    *) host="${host%%:*}" ;;
+  esac
+  printf '%s' "$host"
+}
+
+# True when a host is one only the runner could reach. A NAME is never decided here: it resolves at fetch
+# time, where the engine checks the ADDRESS it actually got, so `10.example.com` is not refused for looking
+# numeric. A LITERAL is decided in every spelling the URL parser accepts, because the operator wrote it and
+# a service bound to it would advertise itself as open and then refuse every request.
+is_private_host() {
+  local host stripped field saved_ifs
+  host="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  # A resolver reads `localhost.` as `localhost`.
+  while [ "${host%.}" != "$host" ]; do host="${host%.}"; done
+  case "$host" in
+    localhost | *.localhost) return 0 ;;
+  esac
+  case "$host" in
     "["*)
       host="${host#"["}"
       host="${host%%]*}"
+      # An embedded IPv4 (`::ffff:127.0.0.1`, the NAT64 `64:ff9b::169.254.169.254`) is decided by its v4
+      # half, whatever prefix stands in front of it.
+      case "$host" in
+        *:*.*.*.*)
+          is_private_host "${host##*:}" && return 0
+          ;;
+      esac
+      # Loopback and unspecified in ANY spelling: drop every `0` and `:`, and `::`, `0:0:0:0:0:0:0:0` and
+      # friends leave nothing, while `::1` and `0:0:0:0:0:0:0:1` leave a `1` the literal also ends with
+      # (so `1::`, which is a different address, is not caught by the same test).
+      stripped="$(printf '%s' "$host" | tr -d '0:')"
+      case "$stripped" in
+        "") return 0 ;;
+        1) case "$host" in *1) return 0 ;; esac ;;
+      esac
+      # Link-local is fe80::/10 (fe80 through febf); unique-local is fc00::/7 (fc00 through fdff). Match the
+      # whole first hextet, not the one spelling `fe80:`.
+      case "$host" in
+        fe[89ab][0-9a-f]:* | f[cd][0-9a-f][0-9a-f]:*) return 0 ;;
+      esac
+      return 1
       ;;
-    *) host="${host%%:*}" ;;
   esac
-  printf '%s' "$host" | tr '[:upper:]' '[:lower:]'
+  case "$host" in
+    # A hex host (`0x7f000001`, `0x7f.0.0.1`) is an address the parser decodes and a person cannot read.
+    # Refuse the spelling rather than decode it here.
+    0x* | *.0x*) return 0 ;;
+    # Anything holding a character that is not a digit or a dot is a NAME: the engine owns it.
+    *[!0-9.]*) return 1 ;;
+  esac
+  # Digits and dots only, so this is an IPv4 literal. Only a canonical dotted quad is read further: a bare
+  # integer (`2130706433`), a short form (`10.1`), or a leading-zero octet (`0177.0.0.1`, which the parser
+  # reads as OCTAL 127) is refused as a spelling nobody should have to decode.
+  saved_ifs="$IFS"
+  IFS='.'
+  set -- $host
+  IFS="$saved_ifs"
+  [ "$#" -eq 4 ] || return 0
+  for field in "$@"; do
+    case "$field" in
+      "" | *[!0-9]*) return 0 ;;
+      0 | [1-9]*) ;;
+      *) return 0 ;;
+    esac
+    [ "$field" -le 255 ] || return 0
+  done
+  case "$host" in
+    # The ranges no caller could route to: loopback, this-network, RFC1918, link-local (which includes the
+    # 169.254.169.254 metadata address), and CGNAT. The same ranges the fetch engine refuses at connect time.
+    127.* | 0.* | 10.* | 169.254.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].* | 192.168.* | \
+    100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*) return 0 ;;
+  esac
+  return 1
 }
 
 # A block-scalar list can hide names past the first line; refuse it here, not at serve.
 case "$public" in
   *$'\n'*)
     echo "::error::public: the list must be one line; a newline is not allowed."
+    exit 1
+    ;;
+esac
+
+# An empty token is refused HERE, on the raw string, because the split hides one: bash `read -ra` DROPS a
+# trailing empty field where serve's parser keeps it, so `ping,` would be proven as one name and delivered
+# as two. All three spellings (leading, doubled, trailing) are still visible before the split.
+case "$public" in
+  ,* | *,,* | *,)
+    echo "::error::public: the list has an empty name; remove the stray comma."
     exit 1
     ;;
 esac
@@ -111,28 +189,8 @@ for name in "${PUBLIC_NAMES[@]}"; do
         exit 1
         ;;
     esac
-    host="$(origin_host "$origin")"
-    private=false
-    case "$host" in
-      localhost | *.localhost) private=true ;;
-    esac
-    case "$host" in
-      # Not an address at all (it holds something other than digits and dots): a name resolves at fetch
-      # time, where the engine checks the ADDRESS it actually got, so `10.example.com` is not refused here
-      # for merely looking numeric.
-      *[!0-9.]*) ;;
-      # The IPv4 literals no caller could route to: loopback, this-network, RFC1918, link-local (which
-      # includes the 169.254.169.254 metadata address), and CGNAT. The same ranges the engine refuses.
-      127.* | 0.* | 10.* | 169.254.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].* | 192.168.* | \
-      100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*) private=true ;;
-    esac
-    case "$host" in
-      # The IPv6 literals: loopback, unspecified, link-local (fe80::/10), unique-local (fc00::/7). Each
-      # pattern needs a colon, which a hostname cannot carry.
-      ::1 | :: | fe80:* | fc*:* | fd*:*) private=true ;;
-    esac
-    if [ "$private" = true ]; then
-      echo "::error::public: fetch origin '$origin' is on the runner's own network; a public fetch must name an origin its callers could reach themselves."
+    if is_private_host "$(origin_host "$origin")"; then
+      echo "::error::public: fetch origin '$origin' is on the runner's own network, or is an address spelled so it does not read as one; a public fetch must name an origin its callers could reach themselves."
       exit 1
     fi
   fi
