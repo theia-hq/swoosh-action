@@ -1,0 +1,21 @@
+name: test-steps
+# Run the action's step bodies against a stub swoosh: what serve receives on argv, what reaches
+# $GITHUB_OUTPUT and $GITHUB_ENV, and the three refusals the action still makes for itself. Everything
+# about a service or a public name is swoosh's own rule, proven at serve; only the wrapper is tested here.
+on:
+  push:
+    paths:
+      - action.yml
+      - scripts/test-steps.rb
+      - .github/workflows/test-steps.yml
+  pull_request:
+    paths:
+      - action.yml
+      - scripts/test-steps.rb
+      - .github/workflows/test-steps.yml
+jobs:
+  steps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ruby scripts/test-steps.rb

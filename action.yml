@@ -25,18 +25,17 @@ inputs:
       a keyless shell plus `ping=ping:`/`speed=speed:` diagnostics (`ssh=sshd: ping=ping: speed=speed:`).
       Add `fetch=fetch:` for HTTP egress you can `swoosh
       fetch --via` through, `web=127.0.0.1:8080` to forward a local port, `sock=unix:/path` for a unix
-      socket, all behind the same family gate. Every entry must be `name=target`: a bare `ping` or `ping:`
-      is refused.
+      socket, all behind the same family gate.
     required: false
     default: "ssh=sshd: ping=ping: speed=speed:"
   public:
     description: >
       open named services to anyone, unauthenticated (a comma-list, exactly as `swoosh serve --public`
-      takes it; e.g. `ping,speed`). Empty by default: every service stays behind your gate. The eligible
-      set is exactly a `ping=ping:`, `speed=speed:`, or `fetch=fetch:<origin>` service: each public name
-      must be bound to its matching built-in target in `services`. Any other shape, including a forward,
-      `echo`, a raw stream, a `--public-unsafe` shape, a name bound to another target, or a name you do
-      not serve, is refused before serve runs. The node enforces `fetch`'s origin scope.
+      takes it; e.g. `ping,speed`). Empty by default: every service stays behind your gate. The list is
+      passed through as one argument: the node proves every name before it announces anything, and
+      refuses what has no safe public form (a keyless shell, a raw stream, an unscoped `fetch:`, a name
+      it does not serve). A runner sits inside a network, and public means anyone on the internet can
+      reach that service with no credential, including a port forward, so name only what you meant.
     required: false
     default: ""
   expires:
@@ -51,9 +50,8 @@ inputs:
     required: false
     default: ""
   version:
-    # FLAG(CLI-Architect): input name `version`, values `latest` or a release tag, default `latest`.
     description: >
-      the swoosh release to install: `latest` (the newest release) or a pinned release tag (e.g. `v0.8.0`).
+      the swoosh release to install: `latest` (the newest release) or a pinned release tag (e.g. `v0.9.0`).
       Pin for reproducible runs; `latest` for always-current.
     required: false
     default: "latest"
@@ -96,10 +94,11 @@ runs:
         # it first: `latest`, or a release tag (`v` then a digit, then tag characters only). No slashes, no
         # dots that start a segment, nothing that can leave the release path.
         if [[ ! "$SWOOSH_REF" =~ ^(latest|v[0-9][0-9A-Za-z.+-]*)$ ]]; then
-          # Echo the rejected value with its line breaks removed: the log is line-oriented, so a value
-          # carrying a newline would emit its own `::` workflow commands from inside this refusal, making
-          # the check that exists to make `version` safe the way in.
-          echo "::error::version: '$(printf '%s' "$SWOOSH_REF" | tr -d '\r\n')' is not a release: use 'latest' or a release tag (e.g. v0.9.1)."
+          # Name the input, never its value. The log is line-oriented, so reprinting a rejected value lets
+          # it emit its own `::` workflow commands from inside the refusal, turning the check that exists
+          # to make `version` safe into the way in. The operator is reading the workflow file that holds
+          # the value, so the echo buys nothing the refusal does not already say.
+          echo "::error::version: not a release: use 'latest' or a release tag (e.g. v0.9.0)."
           exit 1
         fi
         if [ "$SWOOSH_REF" = "latest" ]; then
@@ -155,16 +154,27 @@ runs:
           write_kv "$GITHUB_OUTPUT" services "$THEIA_SERVICES"
         }
         # Parse the inputs BEFORE anything runs, so a refused run never adopts an invite, sets up a home, or
-        # touches the job's environment. Both rules exist because the value LEAVES this step. `services` is
-        # split by `read`, which stops at the first newline, so a block-scalar list would serve line one and
-        # silently drop the rest, and it is written to $GITHUB_OUTPUT. `expires` is echoed back verbatim by
-        # serve's own parse error, and the failure path re-emits that stderr to the public log, where a line
-        # break would forge workflow commands; the shape here is exactly what serve's parser accepts
-        # (digits, then one of s/m/h/d), so this refuses only what serve would refuse anyway, sooner and
-        # without the echo. `public` is proven by the guard below, once the list it is checked against exists.
+        # touches the job's environment. These are the only two rules this step makes (`version` is the
+        # third and last, in the install step above): everything about a service, a target, or a public
+        # name is swoosh's own, proven at `serve` before anything is announced, with a better message than
+        # this shell could write. Both survive because the value
+        # LEAVES this step in a way swoosh never sees. `services` is split by `read`, which stops at the
+        # first newline, so a multi-line list would serve line one and silently drop the rest. `expires` is
+        # echoed back verbatim by serve's own parse error, and the failure path re-emits that stderr to the
+        # public log, where a line break would forge workflow commands; the shape here is exactly what
+        # serve's parser accepts (digits, then one of s/m/h/d), so this refuses only what serve would refuse
+        # anyway, sooner and without the echo.
+        #
+        # A trailing line break is the YAML, not the operator: a folded block (`>`) collapses to one line
+        # and keeps a final newline, so `>` and `>-` differ by one chomping character and would otherwise
+        # differ by accepted-or-refused. Drop it, then refuse an INTERIOR newline, which is the literal
+        # block (`|`) and the one shape that truly truncates. The trimmed value is the one that is served
+        # and written out, so the check and the use read the same string.
+        THEIA_SERVICES="${THEIA_SERVICES%$'\n'}"
+        THEIA_SERVICES="${THEIA_SERVICES%$'\r'}"
         case "$THEIA_SERVICES" in
           *$'\n'*)
-            echo "::error::services: the list must be one line; a newline is not allowed."
+            echo "::error::services: the list must be one line; a multi-line block (yaml '|') is refused because only its first line would be served."
             exit 1
             ;;
         esac
@@ -216,23 +226,18 @@ runs:
         identity_out=$(swoosh identity)
         NODE_ID=$(printf '%s\n' "$identity_out" | sed -n '1p')
         read -ra SERVICES <<< "$THEIA_SERVICES"
-        # Prove the public list BEFORE anything binds: the guard refuses a name that is not eligible, is
-        # not served, or is not bound to its matching built-in target (`ping=ping:`, `speed=speed:`,
-        # `fetch=fetch:<origin>`), so an alias or a forward cannot ride a built-in name. It lives in its
-        # own script for one reason: a decision this consequential gets a test, and a `run:` block cannot
-        # be called (scripts/test-public-guard.rb runs its matrix in CI). It takes the service entries as
-        # the SAME words serve receives below, so the guard and the bind read one list.
-        bash "$GITHUB_ACTION_PATH/scripts/public-guard.sh" "$THEIA_PUBLIC" "${SERVICES[@]+"${SERVICES[@]}"}"
         # Serve the requested services behind the node's gate (the adopted signet, or the node's own key
         # in self-rooted mode): no per-key allowlist. --quiet: the readiness banner (node id, services,
         # gate) is NEVER printed, so it cannot leak into the (public) log; serve stderr is held in a file
         # so a failure echoes with every `bf01...` redacted.
         # Flags first, then `--`, then the services as positionals: everything after `--` is a service
-        # entry, so a services token that begins with a dash cannot reach serve as a FLAG (a smuggled
-        # `--public-unsafe raw` would otherwise open a raw stream the public guard never saw).
+        # entry, so a services token that begins with a dash cannot reach serve as a FLAG. Without the
+        # separator, a `services` value ending `--public-unsafe raw` would hand a raw byte source to
+        # anyone: the operator named a service and the node would read a second open overlay.
         SERVE_ARGS=(--quiet)
         if [ -n "$THEIA_PUBLIC" ]; then
-          # Verbatim passthrough, one argv: every token was proven above, and serve splits on commas.
+          # Verbatim passthrough, one argv: serve splits on commas and proves every name at startup, so
+          # the list the operator wrote is the list the node rules on, with nothing tokenized twice.
           SERVE_ARGS+=(--public "$THEIA_PUBLIC")
         fi
         if [ -n "$EXPIRES" ]; then
