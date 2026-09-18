@@ -62,7 +62,7 @@ discovery. Set it to the `/pkarr` URL of a resolver you run (`iroh-dns-server`, 
 covers both.
 
 `version` is optional and defaults to `latest`, the newest swoosh release. Set a release tag such as
-`v0.9.0` to pin it. [Choose the swoosh version](#choose-the-swoosh-version) covers the install check.
+`v0.10.0` to pin it. [Choose the swoosh version](#choose-the-swoosh-version) covers the install check.
 
 ## Prerequisites
 
@@ -256,7 +256,7 @@ window and how to shorten it.
 - uses: theia-hq/swoosh-action@v2
   with:
     invite: ${{ secrets.THEIA_INVITE }}
-    version: v0.9.0
+    version: v0.10.0
 ```
 
 `latest` installs the newest release, so what runs changes over time; a release tag keeps runs

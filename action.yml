@@ -66,7 +66,7 @@ inputs:
     default: ""
   version:
     description: >
-      the swoosh release to install: `latest` (the newest release) or a pinned release tag (e.g. `v0.9.0`).
+      the swoosh release to install: `latest` (the newest release) or a pinned release tag (e.g. `v0.10.0`).
       Pin for reproducible runs; `latest` for always-current.
     required: false
     default: "latest"
@@ -113,7 +113,7 @@ runs:
           # it emit its own `::` workflow commands from inside the refusal, turning the check that exists
           # to make `version` safe into the way in. The operator is reading the workflow file that holds
           # the value, so the echo buys nothing the refusal does not already say.
-          echo "::error::version: not a release: use 'latest' or a release tag (e.g. v0.9.0)."
+          echo "::error::version: not a release: use 'latest' or a release tag (e.g. v0.10.0)."
           exit 1
         fi
         if [ "$SWOOSH_REF" = "latest" ]; then
