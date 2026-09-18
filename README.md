@@ -51,6 +51,16 @@ node. Omit it and the step returns once the node is up, with the node serving un
 refused without an `invite` (a self-rooted node is reached by a link later steps mint).
 [Hold the job open](#hold-the-job-open) has the details.
 
+`relay` is optional and empty by default, so n0's public relays carry the fallback. Set it to a relay you
+run (`iroh-relay`, e.g. `https://relay.example`) and this runner offers that relay in the record it
+publishes, so peers dial it through yours.
+
+`resolver` is optional and empty by default, so the runner publishes its address record to n0's public
+discovery. Set it to the `/pkarr` URL of a resolver you run (`iroh-dns-server`, e.g.
+`https://dns.example/pkarr`); your own machines find the runner only if they resolve through the same one.
+[Run the relay and the resolver yourself](https://github.com/theia-hq/swoosh/blob/main/docs/transports.md#self-run)
+covers both.
+
 `version` is optional and defaults to `latest`, the newest swoosh release. Set a release tag such as
 `v0.9.0` to pin it. [Choose the swoosh version](#choose-the-swoosh-version) covers the install check.
 

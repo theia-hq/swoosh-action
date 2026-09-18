@@ -77,7 +77,7 @@ def run_step(work, body, inputs)
     "SWOOSH_ARGV_LOG" => paths[:argv], "SWOOSH_SERVE_PID" => paths[:pid],
     "RUNNER_ENVIRONMENT" => "github-hosted", "SWOOSH_INVITE" => "invite", "THEIA_SERVICES" => "",
     "THEIA_PUBLIC" => "", "EXPIRES" => "", "GH_TOKEN" => "token", "SWOOSH_REF" => "latest",
-    "SWOOSH_SERVE_FAIL" => ""
+    "SWOOSH_SERVE_FAIL" => "", "RELAY" => "", "RESOLVER" => ""
   }.merge(inputs)
   [paths[:out], paths[:env], paths[:argv]].each { |file| File.write(file, "") }
 
@@ -206,6 +206,27 @@ def check_step_runs(findings)
     findings << "#{where}: exited #{folded.code}: #{folded.log}" unless folded.code.zero?
     check_serve_argv(folded, ["ping=ping:", "speed=speed:"], [], where, findings)
     delimiters << check_written(folded, "services", "ping=ping: speed=speed:", where, findings)
+
+    # The two reach inputs pass through as their own flags, each as ONE argv, and an empty one adds
+    # nothing: a `--relay ""` would be a flag the node has to rule on rather than the default it already
+    # has. The values are opaque to this action by ruling, so they arrive verbatim and swoosh refuses a bad
+    # one; a URL that begins with a dash must therefore still arrive as DATA, never as a flag.
+    reach = run_step(work, body, "THEIA_SERVICES" => "ping=ping:",
+                     "RELAY" => "https://relay.example", "RESOLVER" => "https://dns.example/pkarr")
+    where = "step(relay and resolver)"
+    findings << "#{where}: exited #{reach.code}: #{reach.log}" unless reach.code.zero?
+    check_serve_argv(reach, ["ping=ping:"],
+                     ["--relay", "https://relay.example", "--resolver", "https://dns.example/pkarr"],
+                     where, findings)
+
+    # Only one named: the other stays n0's, which is serve's own default and takes no flag.
+    relay_only = run_step(work, body, "THEIA_SERVICES" => "ping=ping:", "RELAY" => "https://relay.example")
+    where = "step(relay only)"
+    findings << "#{where}: exited #{relay_only.code}: #{relay_only.log}" unless relay_only.code.zero?
+    check_serve_argv(relay_only, ["ping=ping:"], ["--relay", "https://relay.example"], where, findings)
+    if relay_only.log.include?("--resolver")
+      findings << "#{where}: an unset resolver still reached serve's argv: #{relay_only.log}"
+    end
 
     # `expires` runs serve in the foreground, and settles the outputs on its own path.
     timed = run_step(work, body, "THEIA_SERVICES" => "ping=ping:", "EXPIRES" => "10m")
