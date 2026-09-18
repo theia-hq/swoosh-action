@@ -1,0 +1,13 @@
+name: prose-gate
+# Our process does not ship. A deliberation number, a review path, a round, or a seat name tells a caller
+# nothing they can act on and everything about a corpus they cannot read. Every sibling repo runs this
+# script; here it guards `action.yml` and the README, which are this repo's whole user surface.
+on:
+  push:
+  pull_request:
+jobs:
+  prose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh scripts/prose-gate.sh .
