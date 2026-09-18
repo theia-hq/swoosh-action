@@ -24,7 +24,7 @@ inputs:
       the services to expose, space-separated `name=target` (see `swoosh serve`). Defaults to a full node:
       a keyless shell plus `ping=ping:`/`speed=speed:` diagnostics (`ssh=sshd: ping=ping: speed=speed:`).
       Add `fetch=fetch:` for HTTP egress you can `swoosh
-      fetch --via` through, `web=127.0.0.1:8080` to forward a local port, `sock=unix:/path` for a unix
+      fetch --via` through, `web=tcp:127.0.0.1:8080` to forward a local port, `sock=unix:/path` for a unix
       socket, all behind the same family gate.
     required: false
     default: "ssh=sshd: ping=ping: speed=speed:"

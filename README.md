@@ -86,7 +86,7 @@ Every entry is `name=target`, space-separated. Replace the default set to add th
 - uses: theia-hq/swoosh-action@v2
   with:
     invite: ${{ secrets.THEIA_INVITE }}
-    services: "ssh=sshd: fetch=fetch:https://news.example web=127.0.0.1:8080 sock=unix:/path"
+    services: "ssh=sshd: fetch=fetch:https://news.example web=tcp:127.0.0.1:8080 sock=unix:/path"
 ```
 
 The set you can serve depends on the swoosh release the action installs
@@ -98,7 +98,7 @@ full `name=target` grammar.
 
 ## Reach a service the job runs
 
-The job can serve a local port (a preview build, a dashboard): set `services: "web=127.0.0.1:8080"`,
+The job can serve a local port (a preview build, a dashboard): set `services: "web=tcp:127.0.0.1:8080"`,
 which replaces the default set, and `expires: 4h` to hold the job open for the review window. On the
 machine that holds your signet, `swoosh grant issue web --expires 4h` mints a capability link and
 `swoosh contact ls me` prints the runner's full key; hand reviewers this line (they need the `swoosh`

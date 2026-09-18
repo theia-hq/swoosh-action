@@ -189,10 +189,10 @@ def check_step_runs(findings)
 
     # The action no longer narrows the public set: a forward the operator named is their own informed
     # choice, delivered verbatim, and the node rules on it at startup. This row is the reversal.
-    forward = run_step(work, body, "THEIA_SERVICES" => "web=127.0.0.1:8080", "THEIA_PUBLIC" => "web")
+    forward = run_step(work, body, "THEIA_SERVICES" => "web=tcp:127.0.0.1:8080", "THEIA_PUBLIC" => "web")
     where = "step(a public forward)"
     findings << "#{where}: exited #{forward.code}: #{forward.log}" unless forward.code.zero?
-    check_serve_argv(forward, ["web=127.0.0.1:8080"], ["--public", "web"], where, findings)
+    check_serve_argv(forward, ["web=tcp:127.0.0.1:8080"], ["--public", "web"], where, findings)
 
     # A services token that begins with a dash must arrive as DATA, whatever the call looks like.
     smuggle = ["raw=file:/etc/passwd", "--public-unsafe", "raw"]
