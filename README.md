@@ -127,13 +127,15 @@ Set `public` to open named services to anyone, unauthenticated:
 
 A runner sits inside a network. `public` means anyone on the internet can reach that service with no
 credential, and the node opens anything it considers safe to open, including a port forward into the
-network the job runs in. The action does not narrow the list: it hands it to `swoosh serve --public`
-exactly as you wrote it, and the node proves every name at startup, before it announces anything, and
-refuses what has no safe public form. Name only what you meant.
+network the job runs in. A public `fetch` goes out through that network too: anyone with the key fetches
+the origin you named from the runner's address. The action does not narrow the list: it hands it to
+`swoosh serve --public` exactly as you wrote it, and the node proves every name at startup, before it
+announces anything, and refuses what has no safe public form. Name only what you meant. Callers need the
+`swoosh` client installed ([releases](https://github.com/theia-hq/swoosh/releases)).
 
-**A public service is reachable by anyone who knows the node's key.** There is no link
-to expire and no badge to revoke; `expires` or the end of the job is the bound. The key is public by
-design and grants nothing for the gated services.
+**A public service is reachable by anyone who knows the node's key.** There is no link to expire and no
+badge to revoke; `expires` or the end of the job is the bound. The key is public by design and grants
+nothing for the gated services.
 
 [`swoosh serve`](https://github.com/theia-hq/swoosh/blob/main/docs/reference/commands/serve.md) has what
 each service opens to a stranger and what `--public` refuses;
@@ -275,10 +277,11 @@ service list, the gate) never prints, and an accidental `cat` cannot republish t
 failure the action rewrites every `bf01...` in the node's stderr to `bf01<redacted>` before echoing it.
 
 In adopt mode, `adopt` prints the derived device's short label (like `bf01ueeh4voppqea`), never the full
-node key. The full key is the address a stranger would dial, and it stays on the two machines that need
-it: the node's home and your contacts. Your own terminal or a private log is a fine place to show it; a
-public CI log is not. Unlike tmate's printed connection string, nothing has to be read back from the log
-to reach the node.
+node key. The full key is the address a stranger would dial. With every service gated, it stays on the two
+machines that need it: the node's home and your contacts. Your own terminal or a private log is a fine
+place to show it; a public CI log is not, unless you opened a service with `public` and meant to publish
+the key. Unlike tmate's printed connection string, nothing has to be read back from the log to reach
+the node.
 
 ## Self-hosted runners
 
