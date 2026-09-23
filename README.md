@@ -227,15 +227,83 @@ of your devices reach it by membership. The action warns in the log that the nod
 so your devices will not reach it, and that setting the invite secret adopts instead. There is no
 `me/<label>` contact to dial.
 
-Reach is then a capability link a later step mints and publishes (`swoosh grant issue <service>`), using
-this step's `node-id` output. The later step mints from the same home the node served under: the action
-exports `SWOOSH_HOME` for the rest of the job, which the 0.9.0 client honors. An older client ignores it
-and reuses the default home, so on a persistent self-hosted runner the node can come up under an earlier
-job's identity.
+The node's key lives in a fresh home under `RUNNER_TEMP`, and the action exports `SWOOSH_HOME` for the
+rest of the job, so a later step's `swoosh grant issue` signs with that key. The 0.9.0 client honors
+`SWOOSH_HOME`; an older client ignores it and reuses the default home, so on a persistent self-hosted
+runner the node can come up under an earlier job's identity.
 
-`expires` is refused with an empty `invite`: a self-rooted node is reached by a link later steps must mint
-and publish, and a held step blocks them. Run without `expires`, mint and publish in later steps, and keep
-the job alive with a final step.
+`expires` is refused with an empty `invite`: a self-rooted node is reached by a link a later step mints,
+and a held step blocks it. Run without `expires`, mint in a later step, and keep the job alive with a
+final step.
+
+### Grant one person a service
+
+A person sends their public key; the workflow signs a link for that key and one service, and the person
+dials with it. On their machine:
+
+```sh
+swoosh identity                                  # the first line is your key, bf01...
+gh workflow run exchange.yml -f requester=bf01<your-key>
+```
+
+The workflow, saved as `.github/workflows/exchange.yml`:
+
+```yaml
+name: exchange
+on:
+  workflow_dispatch:
+    inputs:
+      requester:
+        description: your public key, the first line of `swoosh identity`
+        required: true
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - id: node
+        uses: theia-hq/swoosh-action@v2
+      - name: grant the requester the shell
+        env:
+          REQUESTER: ${{ inputs.requester }}
+          NODE_ID: ${{ steps.node.outputs['node-id'] }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$REQUESTER" =~ ^bf01[a-z2-7]{52}$ ]]; then
+            echo "::error::requester: not a public key"
+            exit 1
+          fi
+          link=$(swoosh grant issue ssh --for "$REQUESTER" --expires 30m)
+          printf 'node: `%s`\n\nlink: `%s`\n' "$NODE_ID" "$link" >> "$GITHUB_STEP_SUMMARY"
+      - run: sleep 1800
+```
+
+The person reads the node and the link from the summary of the run they started, then:
+
+```sh
+swoosh ssh bf01<node-key> --present 'sheer:...'
+```
+
+What each part decides:
+
+- **Who may ask.** GitHub lets only people with write access to the repository run a `workflow_dispatch`
+  workflow. That permission check is the whole eligibility rule; the link carries no GitHub identity.
+- **What is granted.** The service (`ssh`) and the lifetime (`30m`) are fixed in the workflow, never taken
+  from the request. The request is a public key and nothing else: the pattern refuses any other text,
+  because `--for` also accepts `fleet:<key>`, which binds a whole fleet instead of one device.
+- **Who can use it.** The link is bound to the requester's key. The node admits it only from that key, so
+  the summary can show it; anyone else who dials with it is refused. Use it with `--present`; it is not an
+  invite, so never `swoosh adopt` it.
+- **What holds the key.** The node's key sits in this job's home and dies with the job. Anything that runs
+  in the job can sign with it, so the job runs no repository code: no checkout, no build.
+
+The workflow grants one service, never membership. A member badge admits its holder to the whole node,
+including `control.stop`, the route `swoosh stop --at` uses to end it. Membership is a person's decision,
+made with `swoosh invite add` on a machine that holds your signet; a workflow never mints it.
+
+The workflow does not check that the requester holds the key they send. Someone with write access can
+name another person's key, and the link then works only for that key's owner, who did not ask for it. Add
+a signed request that proves the requester holds the key before you let anyone without write access ask,
+or let a link outlive the job.
 
 ## Rotate the invite
 
